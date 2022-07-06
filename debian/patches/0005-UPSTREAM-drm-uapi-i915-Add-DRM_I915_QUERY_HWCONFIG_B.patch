@@ -1,0 +1,79 @@
+From c66faa4fdcaca6c692fb984693d808c29e1869ea Mon Sep 17 00:00:00 2001
+From: Jordan Justen <jordan.l.justen@intel.com>
+Date: Wed, 17 Nov 2021 11:09:56 -0800
+Subject: [PATCH 05/25] !UPSTREAM: drm-uapi/i915: Add
+ DRM_I915_QUERY_HWCONFIG_BLOB
+
+Ref: https://lists.freedesktop.org/archives/intel-gfx/2022-February/290555.html
+Ref: https://lists.freedesktop.org/archives/intel-gfx/2022-February/290556.html
+Signed-off-by: Jordan Justen <jordan.l.justen@intel.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/14511>
+---
+ include/drm-uapi/i915_drm.h | 44 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/include/drm-uapi/i915_drm.h b/include/drm-uapi/i915_drm.h
+index c788a1ab423..2276e6753f0 100644
+--- a/include/drm-uapi/i915_drm.h
++++ b/include/drm-uapi/i915_drm.h
+@@ -2499,6 +2499,7 @@ struct drm_i915_query_item {
+ #define DRM_I915_QUERY_ENGINE_INFO	2
+ #define DRM_I915_QUERY_PERF_CONFIG      3
+ #define DRM_I915_QUERY_MEMORY_REGIONS   4
++#define DRM_I915_QUERY_HWCONFIG_BLOB	5
+ /* Must be kept compact -- no holes and well documented */
+ 
+ 	/**
+@@ -3038,6 +3039,49 @@ struct drm_i915_gem_create_ext_memory_regions {
+ 	__u64 regions;
+ };
+ 
++/**
++ * DOC: GuC HWCONFIG blob uAPI
++ *
++ * The GuC produces a blob with information about the current device.
++ * i915 reads this blob from GuC and makes it available via this uAPI.
++ *
++ * The returned blob is a sequence of items of variable length
++ * described by struct drm_i915_query_hwconfig_blob_item.
++ *
++ * The overall blob returned by DRM_I915_QUERY_HWCONFIG_BLOB will end
++ * at the same location as the end of the final struct
++ * drm_i915_query_hwconfig_blob_item. In other words, walking through
++ * the individual items is guaranteed to eventually arrive at the
++ * exact end of the entire blob.
++ */
++
++/**
++ * struct drm_i915_query_hwconfig_blob_item - A single hwconfig item
++ * within the sequence of hwconfig items returned by
++ * DRM_I915_QUERY_HWCONFIG_BLOB.
++ *
++ * The length field gives the length of the data[] array. The length
++ * is the number of u32 items in the data[] array, and *not* the
++ * number of bytes.
++ *
++ * The key and length fields are required, so the minimum item size is
++ * 2 x u32, or 8 bytes, when the length field is 0. If the length
++ * field is 1, then the item's size is 12 bytes.
++ *
++ * The meaning of the key field and the data values are documented in
++ * the Programmer's Reference Manual.
++ */
++struct drm_i915_query_hwconfig_blob_item {
++        /** @key: Enum which defines how to interpret @data values. */
++        __u32 key;
++
++        /** @length: The number of u32 values in the @data array. */
++        __u32 length;
++
++        /** @data: Array of values with meaning defined by @key. */
++        __u32 data[];
++};
++
+ #if defined(__cplusplus)
+ }
+ #endif
+-- 
+2.34.1
+

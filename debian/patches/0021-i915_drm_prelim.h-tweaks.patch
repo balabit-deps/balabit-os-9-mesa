@@ -1,0 +1,43 @@
+From b8ec0b95db23fb293eb0b5b083ee69821dee02ad Mon Sep 17 00:00:00 2001
+From: Jordan Justen <jordan.l.justen@intel.com>
+Date: Wed, 14 Jul 2021 00:04:19 -0700
+Subject: [PATCH 21/25] i915_drm_prelim.h tweaks
+
+* Jason: drm_i915_gem_memory_class_instance, drm_i915_gem_memory_class
+---
+ include/drm-uapi/i915_drm_prelim.h | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/include/drm-uapi/i915_drm_prelim.h b/include/drm-uapi/i915_drm_prelim.h
+index 285f0632c3a..8145ec375da 100644
+--- a/include/drm-uapi/i915_drm_prelim.h
++++ b/include/drm-uapi/i915_drm_prelim.h
+@@ -83,6 +83,9 @@ struct prelim_drm_i915_gem_context_create_ext_clone {
+ 	(((__u64)__I915_PMU_ENGINE(0xff, 0xff, 0xf) + 1 + (x)) | \
+ 	((__u64)(gt) << __PRELIM_I915_PMU_GT_SHIFT))
+ 
++#ifdef __I915_PMU_OTHER
++#undef __I915_PMU_OTHER
++#endif
+ #define __I915_PMU_OTHER(x) ___PRELIM_I915_PMU_OTHER(0, x)
+ 
+ #define __PRELIM_I915_PMU_ACTUAL_FREQUENCY(gt)		___PRELIM_I915_PMU_OTHER(gt, 0)
+@@ -388,10 +391,11 @@ struct prelim_drm_i915_perf_open_param {
+ #define PRELIM_I915_PERF_FLAG_FD_EU_STALL	(1 << 16)
+ };
+ 
+-struct prelim_drm_i915_gem_memory_class_instance {
+-	__u16 memory_class; /* see enum prelim_drm_i915_gem_memory_class */
+-	__u16 memory_instance;
+-};
++//struct prelim_drm_i915_gem_memory_class_instance {
++//	__u16 memory_class; /* see enum prelim_drm_i915_gem_memory_class */
++//	__u16 memory_instance;
++//};
++#define prelim_drm_i915_gem_memory_class_instance drm_i915_gem_memory_class_instance
+ 
+ struct prelim_drm_i915_query_item {
+ #define PRELIM_DRM_I915_QUERY			(1 << 16)
+-- 
+2.34.1
+

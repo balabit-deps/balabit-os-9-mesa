@@ -1,0 +1,51 @@
+From d3a80ad302e4772196a92fcd6c3f53342fa96fd6 Mon Sep 17 00:00:00 2001
+From: Nanley Chery <nanley.g.chery@intel.com>
+Date: Thu, 17 Feb 2022 10:26:34 -0800
+Subject: [PATCH 02/25] anv: Fall back to HiZ when disabling CCS on HiZ+CCS
+
+When an image configured for HIZ_CCS/HIZ_CCS_WT is bound to a BO lacking
+implicit CCS, we disable any compression it may have had. Such images
+are still compatible with ISL_AUX_USAGE_HIZ however. Fall back to that
+aux usage to retain the performance benefit.
+
+Reviewed-by: Lionel Landwerlin <lionel.g.landwerlin@intel.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15068>
+(cherry picked from commit 74e446b45ba72b45563a33a379d7b25e76c9a073)
+---
+ src/intel/vulkan/anv_image.c | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/src/intel/vulkan/anv_image.c b/src/intel/vulkan/anv_image.c
+index 2efa792b12c..93975a06749 100644
+--- a/src/intel/vulkan/anv_image.c
++++ b/src/intel/vulkan/anv_image.c
+@@ -1834,12 +1834,24 @@ VkResult anv_BindImageMemory2(
+          const struct anv_bo *bo =
+             image->bindings[binding].address.bo;
+ 
++         if (!bo || bo->has_implicit_ccs)
++            continue;
++
++         if (!device->physical->has_implicit_ccs)
++            continue;
++
+          if (!isl_aux_usage_has_ccs(image->planes[p].aux_usage))
+             continue;
+ 
+-         if (bo && !bo->has_implicit_ccs &&
+-             device->physical->has_implicit_ccs)
++         if (image->planes[p].aux_surface.memory_range.size > 0) {
++            assert(image->planes[p].aux_usage == ISL_AUX_USAGE_HIZ_CCS ||
++                   image->planes[p].aux_usage == ISL_AUX_USAGE_HIZ_CCS_WT);
++            image->planes[p].aux_usage = ISL_AUX_USAGE_HIZ;
++         } else {
++            assert(image->planes[p].aux_usage == ISL_AUX_USAGE_CCS_E ||
++                   image->planes[p].aux_usage == ISL_AUX_USAGE_STC_CCS);
+             image->planes[p].aux_usage = ISL_AUX_USAGE_NONE;
++         }
+       }
+    }
+ 
+-- 
+2.34.1
+

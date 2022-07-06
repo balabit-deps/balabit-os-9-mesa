@@ -1,0 +1,44 @@
+07_gallium-fix-build-failure-on-powerpcspe.diff
+path_max.diff
+src_glx_dri_common.h.diff
+revert-enabling-tlsdesc-support.diff
+revert-af1ee8e01044.diff
+
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/15068
+0001-anv-Don-t-disable-HiZ-MCS-in-anv_BindImageMemory2.patch
+0002-anv-Fall-back-to-HiZ-when-disabling-CCS-on-HiZ-CCS.patch
+0003-anv-Add-a-perf-warning-in-anv_BindImageMemory2.patch
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/13762
+0004-anv-Disable-storage-image-compression-for-possible-a.patch
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/14511
+0005-UPSTREAM-drm-uapi-i915-Add-DRM_I915_QUERY_HWCONFIG_B.patch
+0006-intel-dev-Read-hwconfig-from-i915.patch
+0007-intel_dev_info-Add-hwconfig-command-line-parameter.patch
+0008-intel-devinfo-Make-use-of-struct-drm_i915_query_hwco.patch
+0009-HACK-intel-dev-Read-hwconfig-from-i915-but-ignore-if.patch
+# more workarounds
+0010-anv-Add-Wa_22012785325.patch
+0011-iris-Add-Wa_22012785325.patch
+0012-anv-Implement-Wa_14015297576.patch
+0013-iris-Implement-Wa_14015297576.patch
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/14521
+0014-WIP-include-uapi-Update-drm_fourcc.h-from-kernel.patch
+0015-isl-iris-Add-I915_FORMAT_MOD_4_TILED-support-for-XeH.patch
+0016-intel-isl-Add-a-score-for-I915_FORMAT_MOD_4_TILED.patch
+0017-isl-iris-Add-DG2-CCS-modifier-support-for-XeHP.patch
+# Wa for XE_HPG
+0018-intel-compiler-Add-Wa_14014063774-for-xe_hpg.patch
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/12706
+0019-intel-Enable-device-ids-for-DG2.patch
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/14523
+0020-drm-uapi-Add-i915_drm_prelim.h.patch
+0021-i915_drm_prelim.h-tweaks.patch
+0022-iris-Use-dii-prelim-drm-uapi-interface.patch
+0023-anv-Use-dii-prelim-drm-uapi-interface.patch
+0024-intel-dev-Read-hwconfig-using-i915-prelim-interface.patch
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/14143
+0025-intel-dev-Compute-pixel-pipe-information-based-on-ge.patch
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/13991
+0026-isl-disable-mcs-and-mcs-ccs-for-color-msaa-on-DG2.patch
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/16210
+0027-iris-use-new-kernel-uAPI-to-compute-video-memory.patch

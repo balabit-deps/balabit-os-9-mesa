@@ -1,0 +1,31 @@
+From 39481611caa34bac0d246ca86c73db3a34a786b7 Mon Sep 17 00:00:00 2001
+From: Anuj Phogat <anuj.phogat@gmail.com>
+Date: Mon, 24 May 2021 11:27:35 -0700
+Subject: [PATCH 10/25] anv: Add Wa_22012785325
+
+Signed-off-by: Anuj Phogat <anuj.phogat@gmail.com>
+---
+ src/intel/vulkan/genX_pipeline.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/intel/vulkan/genX_pipeline.c b/src/intel/vulkan/genX_pipeline.c
+index 598b2093b29..f0584a6366d 100644
+--- a/src/intel/vulkan/genX_pipeline.c
++++ b/src/intel/vulkan/genX_pipeline.c
+@@ -2072,7 +2072,12 @@ emit_3dstate_hs_te_ds(struct anv_graphics_pipeline *pipeline,
+       te.MaximumTessellationFactorOdd = 63.0;
+       te.MaximumTessellationFactorNotOdd = 64.0;
+ #if GFX_VERx10 >= 125
+-      te.TessellationDistributionMode = TEDMODE_RR_FREE;
++      if (intel_device_info_is_dg2(devinfo)) {
++         /* Wa_22012785325 */
++         te.TessellationDistributionMode = TEDMODE_RR_STRICT;
++      } else {
++         te.TessellationDistributionMode = TEDMODE_RR_FREE;
++      }
+       te.TessellationDistributionLevel = TEDLEVEL_PATCH;
+       /* 64_TRIANGLES */
+       te.SmallPatchThreshold = 3;
+-- 
+2.34.1
+

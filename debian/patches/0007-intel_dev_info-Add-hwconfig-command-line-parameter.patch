@@ -1,0 +1,106 @@
+From 03d9276e4ea5f3ef5cc232c8935598e9fad09dd0 Mon Sep 17 00:00:00 2001
+From: Jordan Justen <jordan.l.justen@intel.com>
+Date: Tue, 11 Jan 2022 14:14:01 -0800
+Subject: [PATCH 07/25] intel_dev_info: Add --hwconfig command line parameter
+
+Signed-off-by: Jordan Justen <jordan.l.justen@intel.com>
+Reviewed-by: Caio Oliveira <caio.oliveira@intel.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/14511>
+---
+ src/intel/dev/intel_dev_info.c |  7 +++++++
+ src/intel/dev/intel_hwconfig.c | 15 ++++++++++++++-
+ src/intel/dev/intel_hwconfig.h |  4 +---
+ 3 files changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/src/intel/dev/intel_dev_info.c b/src/intel/dev/intel_dev_info.c
+index 22579a7ecbf..35cb694f0dc 100644
+--- a/src/intel/dev/intel_dev_info.c
++++ b/src/intel/dev/intel_dev_info.c
+@@ -24,6 +24,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <stdarg.h>
++#include <string.h>
+ #include <inttypes.h>
+ 
+ #include <sys/types.h>
+@@ -34,6 +35,7 @@
+ #include <xf86drm.h>
+ 
+ #include "intel_device_info.h"
++#include "intel_hwconfig.h"
+ 
+ static int
+ error(char *fmt, ...)
+@@ -51,6 +53,7 @@ main(int argc, char *argv[])
+ {
+    drmDevicePtr devices[8];
+    int max_devices;
++   bool print_hwconfig = argc > 1 && strcmp(argv[1], "--hwconfig") == 0;
+ 
+    max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
+    if (max_devices < 1)
+@@ -64,6 +67,10 @@ main(int argc, char *argv[])
+       if (fd < 0)
+          continue;
+ 
++      if (print_hwconfig) {
++         intel_get_and_print_hwconfig_table(fd);
++      }
++
+       bool success = intel_get_device_info_from_fd(fd, &devinfo);
+       close(fd);
+ 
+diff --git a/src/intel/dev/intel_hwconfig.c b/src/intel/dev/intel_hwconfig.c
+index 36969810dc7..e2a49fb442d 100644
+--- a/src/intel/dev/intel_hwconfig.c
++++ b/src/intel/dev/intel_hwconfig.c
+@@ -312,10 +312,23 @@ print_hwconfig_item(struct intel_device_info *devinfo,
+    printf("\n");
+ }
+ 
+-void
++static void
+ intel_print_hwconfig_table(const struct hwconfig *hwconfig,
+                            int32_t hwconfig_len)
+ {
+    intel_process_hwconfig_table(NULL, hwconfig, hwconfig_len,
+                                 print_hwconfig_item);
+ }
++
++void
++intel_get_and_print_hwconfig_table(int fd)
++{
++   struct hwconfig *hwconfig;
++   int32_t hwconfig_len = 0;
++   hwconfig = intel_i915_query_alloc(fd, DRM_I915_QUERY_HWCONFIG_BLOB,
++                                     &hwconfig_len);
++   if (hwconfig) {
++      intel_print_hwconfig_table(hwconfig, hwconfig_len);
++      free(hwconfig);
++   }
++}
+diff --git a/src/intel/dev/intel_hwconfig.h b/src/intel/dev/intel_hwconfig.h
+index 20d76abf5ae..829ebcc982d 100644
+--- a/src/intel/dev/intel_hwconfig.h
++++ b/src/intel/dev/intel_hwconfig.h
+@@ -32,15 +32,13 @@
+ extern "C" {
+ #endif
+ 
+-struct hwconfig;
+ struct intel_device_info;
+ 
+ void
+ intel_get_and_process_hwconfig_table(int fd,
+                                      struct intel_device_info *devinfo);
+ void
+-intel_print_hwconfig_table(const struct hwconfig *hwconfig,
+-                           int32_t hwconfig_len);
++intel_get_and_print_hwconfig_table(int fd);
+ 
+ #ifdef __cplusplus
+ }
+-- 
+2.34.1
+
