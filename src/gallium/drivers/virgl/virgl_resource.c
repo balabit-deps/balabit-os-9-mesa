@@ -100,6 +100,7 @@ static bool virgl_can_copy_transfer_from_host(struct virgl_screen *vs,
 {
    return virgl_can_use_staging(vs, res) &&
          !is_stencil_array(res) &&
+         !(bind & VIRGL_BIND_SHARED) &&
          virgl_has_readback_format(&vs->base, pipe_to_virgl_format(res->b.format), false) &&
          ((!(vs->caps.caps.v2.capability_bits & VIRGL_CAP_FAKE_FP64)) ||
           virgl_can_readback_from_rendertarget(vs, res) ||
@@ -253,11 +254,6 @@ virgl_resource_transfer_prepare(struct virgl_context *vctx,
          else
             return VIRGL_TRANSFER_MAP_WRITE_TO_STAGING_WITH_READBACK;
       }
-      /* Readback is yet another command and is transparent to the state
-       * trackers.  It should be waited for in all cases, including when
-       * PIPE_MAP_UNSYNCHRONIZED is set.
-       */
-      wait = true;
 
       /* When the transfer queue has pending writes to this transfer's region,
        * we have to flush before readback.
@@ -281,8 +277,16 @@ virgl_resource_transfer_prepare(struct virgl_context *vctx,
       return VIRGL_TRANSFER_MAP_ERROR;
 
    if (readback) {
+      /* Readback is yet another command and is transparent to the state
+       * trackers.  It should be waited for in all cases, including when
+       * PIPE_MAP_UNSYNCHRONIZED is set.
+       */
+      vws->resource_wait(vws, res->hw_res);
       vws->transfer_get(vws, res->hw_res, &xfer->base.box, xfer->base.stride,
                         xfer->l_stride, xfer->offset, xfer->base.level);
+      /* transfer_get puts the resource into a maybe_busy state, so we will have
+       * to wait another time if we want to use that resource. */
+      wait = true;
    }
 
    if (wait)
@@ -492,6 +496,18 @@ virgl_resource_transfer_map(struct pipe_context *ctx,
 
    /* Multisampled resources require resolve before mapping. */
    assert(resource->nr_samples <= 1);
+
+   /* If virgl resource was created using persistence and coherency flags,
+    * then its memory mapping can be only made in accordance to these
+    * flags. We record the "usage" flags in struct virgl_transfer and
+    * then virgl_buffer_transfer_unmap() uses them to differentiate
+    * unmapping of a host blob resource from guest.
+    */
+   if (resource->flags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT)
+      usage |= PIPE_MAP_PERSISTENT;
+
+   if (resource->flags & PIPE_RESOURCE_FLAG_MAP_COHERENT)
+      usage |= PIPE_MAP_COHERENT;
 
    trans = virgl_resource_create_transfer(vctx, resource,
                                           &vres->metadata, level, usage, box);
@@ -850,14 +866,11 @@ virgl_resource_create_transfer(struct virgl_context *vctx,
    offset += blocksy * metadata->stride[level];
    offset += blocksx * util_format_get_blocksize(format);
 
-   trans = slab_alloc(&vctx->transfer_pool);
+   trans = slab_zalloc(&vctx->transfer_pool);
    if (!trans)
       return NULL;
 
-   /* note that trans is not zero-initialized */
-   trans->base.resource = NULL;
    pipe_resource_reference(&trans->base.resource, pres);
-   trans->hw_res = NULL;
    vws->resource_reference(vws, &trans->hw_res, virgl_resource(pres)->hw_res);
 
    trans->base.level = level;
@@ -867,9 +880,6 @@ virgl_resource_create_transfer(struct virgl_context *vctx,
    trans->base.layer_stride = metadata->layer_stride[level];
    trans->offset = offset;
    util_range_init(&trans->range);
-   trans->copy_src_hw_res = NULL;
-   trans->copy_src_offset = 0;
-   trans->resolve_transfer = NULL;
 
    if (trans->base.resource->target != PIPE_TEXTURE_3D &&
        trans->base.resource->target != PIPE_TEXTURE_CUBE &&

@@ -47,6 +47,7 @@ get_variable_io_mask(nir_variable *var, gl_shader_stage stage)
    assert(var->data.mode == nir_var_shader_in ||
           var->data.mode == nir_var_shader_out);
    assert(var->data.location >= 0);
+   assert(location < 64);
 
    const struct glsl_type *type = var->type;
    if (nir_is_arrayed_io(var, stage) || var->data.per_view) {
@@ -55,7 +56,7 @@ get_variable_io_mask(nir_variable *var, gl_shader_stage stage)
    }
 
    unsigned slots = glsl_count_attribute_slots(type, false);
-   return ((1ull << slots) - 1) << location;
+   return BITFIELD64_MASK(slots) << location;
 }
 
 static bool
@@ -147,7 +148,8 @@ nir_remove_unused_io_vars(nir_shader *shader,
          used = used_by_other_stage;
 
       if (var->data.location < VARYING_SLOT_VAR0 && var->data.location >= 0)
-         continue;
+         if (shader->info.stage != MESA_SHADER_MESH || var->data.location != VARYING_SLOT_PRIMITIVE_ID)
+            continue;
 
       if (var->data.always_active_io)
          continue;
@@ -159,15 +161,25 @@ nir_remove_unused_io_vars(nir_shader *shader,
 
       if (!(other_stage & get_variable_io_mask(var, shader->info.stage))) {
          /* This one is invalid, make it a global variable instead */
+         if (shader->info.stage == MESA_SHADER_MESH &&
+               (shader->info.outputs_read & BITFIELD64_BIT(var->data.location)))
+            var->data.mode = nir_var_mem_shared;
+         else
+            var->data.mode = nir_var_shader_temp;
          var->data.location = 0;
-         var->data.mode = nir_var_shader_temp;
 
          progress = true;
       }
    }
 
-   if (progress)
+   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+   if (progress) {
+      nir_metadata_preserve(impl, nir_metadata_dominance |
+                            nir_metadata_block_index);
       nir_fixup_deref_modes(shader);
+   } else {
+      nir_metadata_preserve(impl, nir_metadata_all);
+   }
 
    return progress;
 }
@@ -1373,26 +1385,40 @@ nir_link_opt_varyings(nir_shader *producer, nir_shader *consumer)
       if (!can_replace_varying(out_var))
          continue;
 
-      nir_ssa_scalar uni_scalar;
       nir_ssa_def *ssa = intr->src[1].ssa;
       if (ssa->parent_instr->type == nir_instr_type_load_const) {
          progress |= replace_varying_input_by_constant_load(consumer, intr);
-      } else if (consumer->options->lower_varying_from_uniform &&
-                 is_direct_uniform_load(ssa, &uni_scalar)) {
-         progress |= replace_varying_input_by_uniform_load(consumer, intr,
-                                                           &uni_scalar);
-      } else {
-         struct hash_entry *entry =
-               _mesa_hash_table_search(varying_values, ssa);
-         if (entry) {
-            progress |= replace_duplicate_input(consumer,
-                                                (nir_variable *) entry->data,
-                                                intr);
+         continue;
+      }
+
+      nir_ssa_scalar uni_scalar;
+      if (is_direct_uniform_load(ssa, &uni_scalar)) {
+         if (consumer->options->lower_varying_from_uniform) {
+            progress |= replace_varying_input_by_uniform_load(consumer, intr,
+                                                              &uni_scalar);
+            continue;
          } else {
             nir_variable *in_var = get_matching_input_var(consumer, out_var);
-            if (in_var) {
-               _mesa_hash_table_insert(varying_values, ssa, in_var);
+            /* The varying is loaded from same uniform, so no need to do any
+             * interpolation. Mark it as flat explicitly.
+             */
+            if (!consumer->options->no_integers &&
+                in_var && in_var->data.interpolation <= INTERP_MODE_NOPERSPECTIVE) {
+               in_var->data.interpolation = INTERP_MODE_FLAT;
+               out_var->data.interpolation = INTERP_MODE_FLAT;
             }
+         }
+      }
+
+      struct hash_entry *entry = _mesa_hash_table_search(varying_values, ssa);
+      if (entry) {
+         progress |= replace_duplicate_input(consumer,
+                                             (nir_variable *) entry->data,
+                                             intr);
+      } else {
+         nir_variable *in_var = get_matching_input_var(consumer, out_var);
+         if (in_var) {
+            _mesa_hash_table_insert(varying_values, ssa, in_var);
          }
       }
    }

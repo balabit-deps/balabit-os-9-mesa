@@ -350,6 +350,44 @@ mir_compute_interference(
 
         mir_foreach_block(ctx, _blk) {
                 midgard_block *blk = (midgard_block *) _blk;
+
+                /* The scalar and vector units run in parallel. We need to make
+                 * sure they don't write to same portion of the register file
+                 * otherwise the result is undefined. Add interferences to
+                 * avoid this situation.
+                 */
+                util_dynarray_foreach(&blk->bundles, midgard_bundle, bundle) {
+                        midgard_instruction *instrs[2][4];
+                        unsigned instr_count[2] = { 0, 0 };
+
+                        for (unsigned i = 0; i < bundle->instruction_count; i++) {
+                                if (bundle->instructions[i]->unit == UNIT_VMUL ||
+                                    bundle->instructions[i]->unit == UNIT_SADD)
+                                        instrs[0][instr_count[0]++] = bundle->instructions[i];
+                                else
+                                        instrs[1][instr_count[1]++] = bundle->instructions[i];
+                        }
+
+                        for (unsigned i = 0; i < ARRAY_SIZE(instr_count); i++) {
+                                for (unsigned j = 0; j < instr_count[i]; j++) {
+                                        midgard_instruction *ins_a = instrs[i][j];
+
+                                        if (ins_a->dest >= ctx->temp_count) continue;
+
+                                        for (unsigned k = j + 1; k < instr_count[i]; k++) {
+                                                midgard_instruction *ins_b = instrs[i][k];
+
+                                                if (ins_b->dest >= ctx->temp_count) continue;
+
+                                                lcra_add_node_interference(l, ins_b->dest,
+                                                                           mir_bytemask(ins_b),
+                                                                           ins_a->dest,
+                                                                           mir_bytemask(ins_a));
+                                        }
+                                }
+                        }
+                }
+
                 uint16_t *live = mem_dup(_blk->live_out, ctx->temp_count * sizeof(uint16_t));
 
                 mir_foreach_instr_in_block_rev(blk, ins) {
@@ -480,6 +518,18 @@ allocate_registers(compiler_context *ctx, bool *spilled)
                         }
                 }
 
+                /* Anything read as 16-bit needs proper alignment to ensure the
+                 * resulting code can be packed.
+                 */
+                mir_foreach_src(ins, s) {
+                        unsigned src_size = nir_alu_type_get_type_size(ins->src_types[s]);
+                        if (src_size == 16 && ins->src[s] < SSA_FIXED_MINIMUM)
+                                min_bound[ins->src[s]] = MAX2(min_bound[ins->src[s]], 8);
+                }
+
+                /* Everything after this concerns only the destination, not the
+                 * sources.
+                 */
                 if (ins->dest >= SSA_FIXED_MINIMUM) continue;
 
                 unsigned size = nir_alu_type_get_type_size(ins->dest_type);
@@ -508,12 +558,6 @@ allocate_registers(compiler_context *ctx, bool *spilled)
                 /* We can't cross xy/zw boundaries. TODO: vec8 can */
                 if (size == 16 && min_alignment[dest] != 4)
                         min_bound[dest] = 8;
-
-                mir_foreach_src(ins, s) {
-                        unsigned src_size = nir_alu_type_get_type_size(ins->src_types[s]);
-                        if (src_size == 16 && ins->src[s] < SSA_FIXED_MINIMUM)
-                                min_bound[ins->src[s]] = MAX2(min_bound[ins->src[s]], 8);
-                }
 
                 /* We don't have a swizzle for the conditional and we don't
                  * want to muck with the conditional itself, so just force
@@ -744,7 +788,7 @@ install_registers_instr(
                         struct phys_reg dst = index_to_reg(ctx, l, ins->dest, dest_shift);
 
                         ins->dest = SSA_FIXED_REGISTER(dst.reg);
-                        offset_swizzle(ins->swizzle[0], 0, 2, 2, dst.offset);
+                        offset_swizzle(ins->swizzle[0], 0, 2, dest_shift, dst.offset);
                         mir_set_bytemask(ins, mir_bytemask(ins) << dst.offset);
                 }
 

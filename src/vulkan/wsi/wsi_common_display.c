@@ -526,11 +526,12 @@ wsi_GetPhysicalDeviceDisplayProperties2KHR(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto bail;
 
-   VK_OUTARRAY_MAKE(conn, pProperties, pPropertyCount);
+   VK_OUTARRAY_MAKE_TYPED(VkDisplayProperties2KHR, conn,
+                          pProperties, pPropertyCount);
 
    wsi_for_each_connector(connector, wsi) {
       if (connector->connected) {
-         vk_outarray_append(&conn, prop) {
+         vk_outarray_append_typed(VkDisplayProperties2KHR, &conn, prop) {
             wsi_display_fill_in_display_properties(wsi_device,
                                                    connector,
                                                    prop);
@@ -580,10 +581,11 @@ wsi_GetPhysicalDeviceDisplayPlanePropertiesKHR(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto bail;
 
-   VK_OUTARRAY_MAKE(conn, pProperties, pPropertyCount);
+   VK_OUTARRAY_MAKE_TYPED(VkDisplayPlanePropertiesKHR, conn,
+                          pProperties, pPropertyCount);
 
    wsi_for_each_connector(connector, wsi) {
-      vk_outarray_append(&conn, prop) {
+      vk_outarray_append_typed(VkDisplayPlanePropertiesKHR, &conn, prop) {
          VkDisplayPlaneProperties2KHR prop2 = {
             .sType = VK_STRUCTURE_TYPE_DISPLAY_PLANE_PROPERTIES_2_KHR,
          };
@@ -614,10 +616,11 @@ wsi_GetPhysicalDeviceDisplayPlaneProperties2KHR(VkPhysicalDevice physicalDevice,
    if (result != VK_SUCCESS)
       goto bail;
 
-   VK_OUTARRAY_MAKE(conn, pProperties, pPropertyCount);
+   VK_OUTARRAY_MAKE_TYPED(VkDisplayPlaneProperties2KHR, conn,
+                          pProperties, pPropertyCount);
 
    wsi_for_each_connector(connector, wsi) {
-      vk_outarray_append(&conn, prop) {
+      vk_outarray_append_typed(VkDisplayPlaneProperties2KHR, &conn, prop) {
          wsi_display_fill_in_display_plane_properties(wsi_device, connector,
                                                       prop);
       }
@@ -644,13 +647,13 @@ wsi_GetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDevice,
    struct wsi_display *wsi =
       (struct wsi_display *) wsi_device->wsi[VK_ICD_WSI_PLATFORM_DISPLAY];
 
-   VK_OUTARRAY_MAKE(conn, pDisplays, pDisplayCount);
+   VK_OUTARRAY_MAKE_TYPED(VkDisplayKHR, conn, pDisplays, pDisplayCount);
 
    int c = 0;
 
    wsi_for_each_connector(connector, wsi) {
       if (c == planeIndex && connector->connected) {
-         vk_outarray_append(&conn, display) {
+         vk_outarray_append_typed(VkDisplayKHR, &conn, display) {
             *display = wsi_display_connector_to_handle(connector);
          }
       }
@@ -690,13 +693,14 @@ wsi_GetDisplayModePropertiesKHR(VkPhysicalDevice physicalDevice,
    struct wsi_display_connector *connector =
       wsi_display_connector_from_handle(display);
 
-   VK_OUTARRAY_MAKE(conn, pProperties, pPropertyCount);
+   VK_OUTARRAY_MAKE_TYPED(VkDisplayModePropertiesKHR, conn,
+                          pProperties, pPropertyCount);
 
    wsi_for_each_display_mode(display_mode, connector) {
       if (!display_mode->valid)
          continue;
 
-      vk_outarray_append(&conn, prop) {
+      vk_outarray_append_typed(VkDisplayModePropertiesKHR, &conn, prop) {
          VkDisplayModeProperties2KHR prop2 = {
             .sType = VK_STRUCTURE_TYPE_DISPLAY_MODE_PROPERTIES_2_KHR,
          };
@@ -719,13 +723,14 @@ wsi_GetDisplayModeProperties2KHR(VkPhysicalDevice physicalDevice,
    struct wsi_display_connector *connector =
       wsi_display_connector_from_handle(display);
 
-   VK_OUTARRAY_MAKE(conn, pProperties, pPropertyCount);
+   VK_OUTARRAY_MAKE_TYPED(VkDisplayModeProperties2KHR, conn,
+                          pProperties, pPropertyCount);
 
    wsi_for_each_display_mode(display_mode, connector) {
       if (!display_mode->valid)
          continue;
 
-      vk_outarray_append(&conn, prop) {
+      vk_outarray_append_typed(VkDisplayModeProperties2KHR, &conn, prop) {
          wsi_display_fill_in_display_mode_properties(wsi_device,
                                                      display_mode, prop);
       }
@@ -922,7 +927,7 @@ wsi_display_surface_get_surface_counters(
    VkIcdSurfaceBase *surface_base,
    VkSurfaceCounterFlagsEXT *counters)
 {
-   *counters = VK_SURFACE_COUNTER_VBLANK_EXT;
+   *counters = VK_SURFACE_COUNTER_VBLANK_BIT_EXT;
    return VK_SUCCESS;
 }
 
@@ -983,15 +988,16 @@ wsi_display_surface_get_formats(VkIcdSurfaceBase *icd_surface,
                                 uint32_t *surface_format_count,
                                 VkSurfaceFormatKHR *surface_formats)
 {
-   VK_OUTARRAY_MAKE(out, surface_formats, surface_format_count);
+   VK_OUTARRAY_MAKE_TYPED(VkSurfaceFormatKHR, out,
+                          surface_formats, surface_format_count);
 
    VkFormat sorted_formats[ARRAY_SIZE(available_surface_formats)];
    get_sorted_vk_formats(wsi_device, sorted_formats);
 
    for (unsigned i = 0; i < ARRAY_SIZE(sorted_formats); i++) {
-      vk_outarray_append(&out, f) {
+      vk_outarray_append_typed(VkSurfaceFormatKHR, &out, f) {
          f->format = sorted_formats[i];
-         f->colorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+         f->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
       }
    }
 
@@ -1005,16 +1011,17 @@ wsi_display_surface_get_formats2(VkIcdSurfaceBase *surface,
                                  uint32_t *surface_format_count,
                                  VkSurfaceFormat2KHR *surface_formats)
 {
-   VK_OUTARRAY_MAKE(out, surface_formats, surface_format_count);
+   VK_OUTARRAY_MAKE_TYPED(VkSurfaceFormat2KHR, out,
+                          surface_formats, surface_format_count);
 
    VkFormat sorted_formats[ARRAY_SIZE(available_surface_formats)];
    get_sorted_vk_formats(wsi_device, sorted_formats);
 
    for (unsigned i = 0; i < ARRAY_SIZE(sorted_formats); i++) {
-      vk_outarray_append(&out, f) {
+      vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, f) {
          assert(f->sType == VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR);
          f->surfaceFormat.format = sorted_formats[i];
-         f->surfaceFormat.colorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+         f->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
       }
    }
 
@@ -1026,9 +1033,10 @@ wsi_display_surface_get_present_modes(VkIcdSurfaceBase *surface,
                                       uint32_t *present_mode_count,
                                       VkPresentModeKHR *present_modes)
 {
-   VK_OUTARRAY_MAKE(conn, present_modes, present_mode_count);
+   VK_OUTARRAY_MAKE_TYPED(VkPresentModeKHR, conn,
+                          present_modes, present_mode_count);
 
-   vk_outarray_append(&conn, present) {
+   vk_outarray_append_typed(VkPresentModeKHR, &conn, present) {
       *present = VK_PRESENT_MODE_FIFO_KHR;
    }
 
@@ -1043,10 +1051,10 @@ wsi_display_surface_get_present_rectangles(VkIcdSurfaceBase *surface_base,
 {
    VkIcdSurfaceDisplay *surface = (VkIcdSurfaceDisplay *) surface_base;
    wsi_display_mode *mode = wsi_display_mode_from_handle(surface->displayMode);
-   VK_OUTARRAY_MAKE(out, pRects, pRectCount);
+   VK_OUTARRAY_MAKE_TYPED(VkRect2D, out, pRects, pRectCount);
 
    if (wsi_device_matches_drm_fd(wsi_device, mode->connector->wsi->fd)) {
-      vk_outarray_append(&out, rect) {
+      vk_outarray_append_typed(VkRect2D, &out, rect) {
          *rect = (VkRect2D) {
             .offset = { 0, 0 },
             .extent = { mode->hdisplay, mode->vdisplay },
@@ -1096,11 +1104,8 @@ wsi_display_image_init(VkDevice device_h,
    memset(image->buffer, 0, sizeof (image->buffer));
 
    for (unsigned int i = 0; i < image->base.num_planes; i++) {
-      int ret = drmPrimeFDToHandle(wsi->fd, image->base.fds[i],
+      int ret = drmPrimeFDToHandle(wsi->fd, image->base.dma_buf_fd,
                                    &image->buffer[i]);
-
-      close(image->base.fds[i]);
-      image->base.fds[i] = -1;
       if (ret < 0)
          goto fail_handle;
    }
@@ -1128,10 +1133,6 @@ fail_handle:
    for (unsigned int i = 0; i < image->base.num_planes; i++) {
       if (image->buffer[i])
          wsi_display_destroy_buffer(wsi, image->buffer[i]);
-      if (image->base.fds[i] != -1) {
-         close(image->base.fds[i]);
-         image->base.fds[i] = -1;
-      }
    }
 
    wsi_destroy_image(&chain->base, &image->base);
@@ -1971,7 +1972,6 @@ wsi_display_surface_create_swapchain(
 
    result = wsi_configure_native_image(&chain->base, create_info,
                                        0, NULL, NULL,
-                                       NULL /* alloc_shm */,
                                        &chain->base.image_info);
    if (result != VK_SUCCESS) {
       vk_free(allocator, chain);
@@ -2242,6 +2242,8 @@ wsi_ReleaseDisplayEXT(VkPhysicalDevice physicalDevice,
       close(wsi->fd);
       wsi->fd = -1;
    }
+
+   wsi_display_connector_from_handle(display)->active = false;
 
 #ifdef VK_USE_PLATFORM_XLIB_XRANDR_EXT
    wsi_display_connector_from_handle(display)->output = None;
