@@ -439,11 +439,30 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
    s.CubeFaceEnableNegativeX = 1;
 
 #if GFX_VER >= 6
+   /* From the Broadwell PRM for "Number of Multisamples":
+    *
+    *    "If this field is any value other than MULTISAMPLECOUNT_1, Surface
+    *    Min LOD, Mip Count / LOD, and Resource Min LOD must be set to zero."
+    *
+    * This is fine because no 3D API allows multisampling and mipmapping at
+    * the same time.
+    */
+   if (info->surf->samples > 1) {
+      assert(info->view->min_lod_clamp == 0);
+      assert(info->view->base_level == 0);
+      assert(info->view->levels == 1);
+   }
    s.NumberofMultisamples = ffs(info->surf->samples) - 1;
 #if GFX_VER >= 7
    s.MultisampledSurfaceStorageFormat =
       isl_encode_multisample_layout[info->surf->msaa_layout];
 #endif
+#endif
+
+#if GFX_VER >= 7
+   s.ResourceMinLOD = info->view->min_lod_clamp;
+#else
+   assert(info->view->min_lod_clamp == 0);
 #endif
 
 #if (GFX_VERx10 >= 75)
@@ -556,7 +575,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
           * say:
           *
           *    "If Number of multisamples > 1, programming this value means
-          *    MSAA compression is enabled for that surface. Auxillary surface
+          *    MSAA compression is enabled for that surface. Auxiliary surface
           *    is MSC with tile y."
           *
           * Since this interpretation ignores whether the surface is
@@ -594,6 +613,42 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
 #if GFX_VER >= 12
       s.MemoryCompressionEnable = info->aux_usage == ISL_AUX_USAGE_MC;
 #endif
+#if GFX_VER >= 9
+      /* Some CCS aux usages have format restrictions. The Skylake PRM doc for
+       * RENDER_SURFACE_STATE::AuxiliarySurfaceMode says:
+       *
+       *    If Number of Multisamples is MULTISAMPLECOUNT_1, AUX_CCS_E setting
+       *    is only allowed if Surface Format is supported for Render Target
+       *    Compression. This setting enables render target compression.
+       *
+       * If CCS_E is in use, the format must support it.
+       */
+      if (info->aux_usage == ISL_AUX_USAGE_CCS_E ||
+          info->aux_usage == ISL_AUX_USAGE_GFX12_CCS_E)
+         assert(isl_format_supports_ccs_e(dev->info, info->view->format));
+
+      /* It also says:
+       *
+       *    If Number of Multisamples is MULTISAMPLECOUNT_1, AUX_CCS_D setting
+       *    is only allowed if Surface Format supported for Fast Clear. In
+       *    addition, if the surface is bound to the sampling engine, Surface
+       *    Format must be supported for Render Target Compression for
+       *    surfaces bound to the sampling engine. For render target surfaces,
+       *    this setting disables render target compression. For sampling
+       *    engine surfaces, this mode behaves the same as AUX_CCS_E.
+       *
+       * If CCS_D is in use while rendering, the format must support it. If
+       * it's in use while sampling, the format must support CCS_E.
+       */
+      if (info->aux_usage == ISL_AUX_USAGE_CCS_D) {
+         if (info->view->usage & ISL_SURF_USAGE_RENDER_TARGET_BIT) {
+            assert(isl_format_supports_ccs_d(dev->info, info->view->format));
+         } else {
+            assert(info->view->usage & ISL_SURF_USAGE_TEXTURE_BIT);
+            assert(isl_format_supports_ccs_e(dev->info, info->view->format));
+         }
+      }
+#endif
 #if GFX_VER >= 8
       s.AuxiliarySurfaceMode = isl_encode_aux_mode[info->aux_usage];
 #else
@@ -601,7 +656,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
 #endif
    }
 
-   /* The auxiliary buffer info is filled when it's useable by the HW.
+   /* The auxiliary buffer info is filled when it's usable by the HW.
     *
     * Starting with Gfx12, the only form of compression that can be used
     * with RENDER_SURFACE_STATE which requires an aux surface is MCS.
@@ -655,7 +710,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
          /* From the SKL PRM, Programming Note under Sampler Output Channel
           * Mapping:
           *
-          *    If a surface has an associated HiZ Auxilliary surface, the
+          *    If a surface has an associated HiZ Auxiliary surface, the
           *    Sampler L2 Bypass Mode Disable field in the RENDER_SURFACE_STATE
           *    must be set.
           */
@@ -741,7 +796,7 @@ isl_genX(buffer_fill_state_s)(const struct isl_device *dev, void *state,
    uint64_t buffer_size = info->size_B;
 
    /* Uniform and Storage buffers need to have surface size not less that the
-    * aligned 32-bit size of the buffer. To calculate the array lenght on
+    * aligned 32-bit size of the buffer. To calculate the array length on
     * unsized arrays in StorageBuffer the last 2 bits store the padding size
     * added to the surface, so we can calculate latter the original buffer
     * size to know the number of elements.

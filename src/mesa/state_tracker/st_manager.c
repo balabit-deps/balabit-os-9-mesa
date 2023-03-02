@@ -262,7 +262,9 @@ st_framebuffer_validate(struct gl_framebuffer *stfb,
 
       rb = stfb->Attachment[idx].Renderbuffer;
       assert(rb);
-      if (rb->texture == textures[i]) {
+      if (rb->texture == textures[i] &&
+          rb->Width == textures[i]->width0 &&
+          rb->Height == textures[i]->height0) {
          pipe_resource_reference(&textures[i], NULL);
          continue;
       }
@@ -825,6 +827,9 @@ st_context_flush(struct st_context_iface *stctxi, unsigned flags,
       st->gfx_shaders_may_be_dirty = true;
 }
 
+/* This is only for GLX_EXT_texture_from_pixmap and equivalent features
+ * in EGL and WGL.
+ */
 static bool
 st_context_teximage(struct st_context_iface *stctxi,
                     enum st_texture_type tex_type,
@@ -907,6 +912,7 @@ st_context_teximage(struct st_context_iface *stctxi,
    texObj->needs_validation = true;
 
    _mesa_dirty_texobj(ctx, texObj);
+   ctx->Shared->HasExternallySharedImages = true;
    _mesa_unlock_texture(ctx, texObj);
 
    return true;

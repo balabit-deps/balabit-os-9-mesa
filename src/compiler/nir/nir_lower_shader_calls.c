@@ -163,7 +163,7 @@ can_remat_instr(nir_instr *instr, struct brw_bitset *remat)
 
       case nir_intrinsic_load_scratch_base_ptr:
       case nir_intrinsic_load_ray_launch_id:
-      case nir_intrinsic_load_btd_dss_id_intel:
+      case nir_intrinsic_load_topology_id_intel:
       case nir_intrinsic_load_btd_global_arg_addr_intel:
       case nir_intrinsic_load_btd_resume_sbt_addr_intel:
       case nir_intrinsic_load_ray_base_mem_addr_intel:
@@ -176,7 +176,8 @@ can_remat_instr(nir_instr *instr, struct brw_bitset *remat)
       case nir_intrinsic_load_ray_miss_sbt_stride_intel:
       case nir_intrinsic_load_callable_sbt_addr_intel:
       case nir_intrinsic_load_callable_sbt_stride_intel:
-      case nir_intrinsic_load_mesh_inline_data_intel:
+      case nir_intrinsic_load_reloc_const_intel:
+      case nir_intrinsic_load_ray_query_global_intel:
          /* Notably missing from the above list is btd_local_arg_addr_intel.
           * This is because the resume shader will have a different local
           * argument pointer because it has a different BSR.  Any access of
@@ -1035,11 +1036,42 @@ found_resume:
    return true;
 }
 
+static bool
+wrap_jump_instr(nir_builder *b, nir_instr *instr, void *data)
+{
+   if (instr->type != nir_instr_type_jump)
+      return false;
+
+   b->cursor = nir_before_instr(instr);
+
+   nir_if *_if = nir_push_if(b, nir_imm_true(b));
+   nir_pop_if(b, NULL);
+
+   nir_cf_list cf_list;
+   nir_cf_extract(&cf_list, nir_before_instr(instr), nir_after_instr(instr));
+   nir_cf_reinsert(&cf_list, nir_before_block(nir_if_first_then_block(_if)));
+
+   return true;
+}
+
+/* This pass wraps jump instructions in a dummy if block so that when
+ * flatten_resume_if_ladder() does its job, it doesn't move a jump instruction
+ * directly in front of another instruction which the NIR control flow helpers
+ * do not allow.
+ */
+static bool
+wrap_jumps(nir_shader *shader)
+{
+   return nir_shader_instructions_pass(shader, wrap_jump_instr,
+                                       nir_metadata_none, NULL);
+}
+
 static nir_instr *
 lower_resume(nir_shader *shader, int call_idx)
 {
-   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
+   wrap_jumps(shader);
 
+   nir_function_impl *impl = nir_shader_get_entrypoint(shader);
    nir_instr *resume_instr = find_resume_instr(impl, call_idx);
 
    if (duplicate_loop_bodies(impl, resume_instr)) {
@@ -1084,10 +1116,10 @@ lower_resume(nir_shader *shader, int call_idx)
 
    ralloc_free(mem_ctx);
 
+   nir_metadata_preserve(impl, nir_metadata_none);
+
    nir_validate_shader(shader, "after flatten_resume_if_ladder in "
                                "brw_nir_lower_shader_calls");
-
-   nir_metadata_preserve(impl, nir_metadata_none);
 
    return resume_instr;
 }
@@ -1196,8 +1228,16 @@ nir_lower_shader_calls(nir_shader *shader,
 
    /* Make N copies of our shader */
    nir_shader **resume_shaders = ralloc_array(mem_ctx, nir_shader *, num_calls);
-   for (unsigned i = 0; i < num_calls; i++)
+   for (unsigned i = 0; i < num_calls; i++) {
       resume_shaders[i] = nir_shader_clone(mem_ctx, shader);
+
+      /* Give them a recognizable name */
+      resume_shaders[i]->info.name =
+         ralloc_asprintf(mem_ctx, "%s%sresume_%u",
+                         shader->info.name ? shader->info.name : "",
+                         shader->info.name ? "-" : "",
+                         i);
+   }
 
    replace_resume_with_halt(shader, NULL);
    for (unsigned i = 0; i < num_calls; i++) {
@@ -1205,7 +1245,7 @@ nir_lower_shader_calls(nir_shader *shader,
       replace_resume_with_halt(resume_shaders[i], resume_instr);
       nir_opt_remove_phis(resume_shaders[i]);
       /* Remove the dummy blocks added by flatten_resume_if_ladder() */
-      nir_opt_if(resume_shaders[i], false);
+      nir_opt_if(resume_shaders[i], nir_opt_if_optimize_phi_true_false);
    }
 
    *resume_shaders_out = resume_shaders;
