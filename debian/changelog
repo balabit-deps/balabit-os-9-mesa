@@ -1,3 +1,19 @@
+mesa (22.2.5-0ubuntu0.1~22.04.3) jammy; urgency=medium
+
+  * rules: Set VERSION so that it also includes the packaging
+    revision. (LP: #2020604)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 31 May 2023 11:21:54 +0300
+
+mesa (22.2.5-0ubuntu0.1~22.04.2) jammy; urgency=medium
+
+  * patches: Fix VA-API on DCN 3.1.4. (LP: #2017142)
+  * patches: Fix a freeze with iris under stress test. (LP: #1990089)
+  * patches: Revert two commits causing kwin to eventually crash. (LP:
+    #2003339)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 21 Apr 2023 14:51:10 +0300
+
 mesa (22.2.5-0ubuntu0.1~22.04.1) jammy; urgency=medium
 
   * Backport to jammy. (LP: #1991761)
