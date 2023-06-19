@@ -75,6 +75,10 @@ if not _shared_llvm or not (dep_clang.found() and dep_clang_usable)
     cpp.find_library('clangBasic', dirs : llvm_libdir),
     polly_dep, polly_isl_dep,
   ]
+  if dep_llvm.version().version_compare('>= 15.0')
+    dep_clang += cpp.find_library('clangSupport', dirs : llvm_libdir)
+  endif
+
   # check clang once more
   if can_check_clang
     test_run = cpp.run(clang_test_code, name : 'dep-clang-usable',
@@ -85,7 +89,13 @@ if not _shared_llvm or not (dep_clang.found() and dep_clang_usable)
   endif
 endif
 
-ocldef = files(opencl_libname + '.def')[0]
+ocldef_in = files(opencl_libname + '.def.in')[0]
+ocldef = custom_target(
+  'ocldef.def',
+  input: ocldef_in,
+  output : 'ocldef.def',
+  command : gen_vs_module_defs_normal_command,
+)
 
 libopencl = shared_library(
   opencl_libname,

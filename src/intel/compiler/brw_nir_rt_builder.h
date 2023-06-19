@@ -163,7 +163,7 @@ brw_nir_num_rt_stacks(nir_builder *b,
                       const struct intel_device_info *devinfo)
 {
    return nir_imul_imm(b, nir_load_ray_num_dss_rt_stacks_intel(b),
-                          intel_device_info_num_dual_subslices(devinfo));
+                          intel_device_info_dual_subslice_id_bound(devinfo));
 }
 
 static inline nir_ssa_def *
@@ -396,6 +396,7 @@ struct brw_nir_rt_mem_hit_defs {
    nir_ssa_def *aabb_hit_kind; /**< Only valid for AABB geometry */
    nir_ssa_def *valid;
    nir_ssa_def *leaf_type;
+   nir_ssa_def *prim_index_delta;
    nir_ssa_def *prim_leaf_index;
    nir_ssa_def *bvh_level;
    nir_ssa_def *front_face;
@@ -418,6 +419,8 @@ brw_nir_rt_load_mem_hit_from_addr(nir_builder *b,
    defs->aabb_hit_kind = nir_channel(b, data, 1);
    defs->tri_bary = nir_channels(b, data, 0x6);
    nir_ssa_def *bitfield = nir_channel(b, data, 3);
+   defs->prim_index_delta =
+      nir_ubitfield_extract(b, bitfield, nir_imm_int(b, 0), nir_imm_int(b, 16));
    defs->valid = nir_i2b(b, nir_iand_imm(b, bitfield, 1u << 16));
    defs->leaf_type =
       nir_ubitfield_extract(b, bitfield, nir_imm_int(b, 17), nir_imm_int(b, 3));
@@ -433,24 +436,6 @@ brw_nir_rt_load_mem_hit_from_addr(nir_builder *b,
       brw_nir_rt_unpack_leaf_ptr(b, nir_channels(b, data, 0x3 << 0));
    defs->inst_leaf_ptr =
       brw_nir_rt_unpack_leaf_ptr(b, nir_channels(b, data, 0x3 << 2));
-}
-
-static inline void
-brw_nir_rt_init_mem_hit_at_addr(nir_builder *b,
-                                nir_ssa_def *stack_addr,
-                                bool committed,
-                                nir_ssa_def *t_max)
-{
-   nir_ssa_def *mem_hit_addr =
-      brw_nir_rt_mem_hit_addr_from_addr(b, stack_addr, committed);
-
-   /* Set the t_max value from the ray initialization */
-   nir_ssa_def *hit_t_addr = mem_hit_addr;
-   brw_nir_rt_store(b, hit_t_addr, 4, t_max, 0x1);
-
-   /* Clear all the flags packed behind primIndexDelta */
-   nir_ssa_def *state_addr = nir_iadd_imm(b, mem_hit_addr, 12);
-   brw_nir_rt_store(b, state_addr, 4, nir_imm_int(b, 0), 0x1);
 }
 
 static inline void
@@ -475,9 +460,9 @@ brw_nir_memcpy_global(nir_builder *b,
 
    for (unsigned offset = 0; offset < size; offset += 16) {
       nir_ssa_def *data =
-         brw_nir_rt_load(b, nir_iadd_imm(b, src_addr, offset), src_align,
+         brw_nir_rt_load(b, nir_iadd_imm(b, src_addr, offset), 16,
                          4, 32);
-      brw_nir_rt_store(b, nir_iadd_imm(b, dst_addr, offset), dst_align,
+      brw_nir_rt_store(b, nir_iadd_imm(b, dst_addr, offset), 16,
                        data, 0xf /* write_mask */);
    }
 }
@@ -930,17 +915,30 @@ brw_nir_rt_load_primitive_id_from_hit(nir_builder *b,
                     nir_imm_int(b, BRW_RT_BVH_NODE_TYPE_PROCEDURAL));
    }
 
-   /* The IDs are located in the leaf. Take the index of the hit.
-    *
-    * The index in dw[3] for procedural and dw[2] for quad.
-    */
-   nir_ssa_def *offset =
-      nir_bcsel(b, is_procedural,
-                   nir_iadd_imm(b, nir_ishl_imm(b, defs->prim_leaf_index, 2), 12),
-                   nir_imm_int(b, 8));
-   return nir_load_global(b, nir_iadd(b, defs->prim_leaf_ptr,
-                                         nir_u2u64(b, offset)),
-                             4, /* align */ 1, 32);
+   nir_ssa_def *prim_id_proc, *prim_id_quad;
+   nir_push_if(b, is_procedural);
+   {
+      /* For procedural leafs, the index is in dw[3]. */
+      nir_ssa_def *offset =
+         nir_iadd_imm(b, nir_ishl_imm(b, defs->prim_leaf_index, 2), 12);
+      prim_id_proc = nir_load_global(b, nir_iadd(b, defs->prim_leaf_ptr,
+                                                 nir_u2u64(b, offset)),
+                                     4, /* align */ 1, 32);
+   }
+   nir_push_else(b, NULL);
+   {
+      /* For quad leafs, the index is dw[2] and there is a 16bit additional
+       * offset in dw[3].
+       */
+      prim_id_quad = nir_load_global(b, nir_iadd_imm(b, defs->prim_leaf_ptr, 8),
+                                     4, /* align */ 1, 32);
+      prim_id_quad = nir_iadd(b,
+                              prim_id_quad,
+                              defs->prim_index_delta);
+   }
+   nir_pop_if(b, NULL);
+
+   return nir_if_phi(b, prim_id_proc, prim_id_quad);
 }
 
 static inline nir_ssa_def *

@@ -2,10 +2,8 @@
 path_max.diff
 src_glx_dri_common.h.diff
 
-0001-radeonsi-vcn-add-decode-support-for-gfx1101-and-gfx1.patch
+0001-freedreno-Specify-GMEM-tile-alignment-per-GPU.patch
+0002-freedreno-tu-Big-GMEM-support.patch
+0003-freedreno-tu-Add-a690-support.patch
 
-0001-iris-Retry-DRM_IOCTL_I915_GEM_EXECBUFFER2-on-ENOMEM.patch
-0002-Revert-iris-Avoid-abort-if-kernel-can-t-allocate-mem.patch
-
-0001-Revert-glx-Fix-drawable-refcounting-for-naked-Window.patch
-0002-Revert-glx-dri-Fix-DRI-drawable-release-at-MakeCurre.patch
+0001-Revert-gallium-u_threaded-buffer-sharedness-tracking.patch

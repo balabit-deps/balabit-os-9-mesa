@@ -1,33 +1,243 @@
-mesa (22.2.5-0ubuntu0.1~22.04.3) jammy; urgency=medium
+mesa (23.0.4-0ubuntu1~22.04.1) jammy; urgency=medium
+
+  * Backport to 22.04. (LP: #2019212)
+  * rules: Disable rusticl, FTBFS on jammy.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 19 Jun 2023 14:41:08 +0300
+
+mesa (23.0.4-0ubuntu1~23.04.1) lunar; urgency=medium
+
+  * New upstream release. (LP: #2021948)
+    - add a revert for amdgpu which missed 23.0.x branch
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 09 Jun 2023 12:53:37 +0300
+
+mesa (23.0.3-0ubuntu2) mantic; urgency=medium
 
   * rules: Set VERSION so that it also includes the packaging
     revision. (LP: #2020604)
 
- -- Timo Aaltonen <tjaalton@debian.org>  Wed, 31 May 2023 11:21:54 +0300
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 30 May 2023 09:53:55 +0300
 
-mesa (22.2.5-0ubuntu0.1~22.04.2) jammy; urgency=medium
+mesa (23.0.3-0ubuntu1) mantic; urgency=medium
 
-  * patches: Fix VA-API on DCN 3.1.4. (LP: #2017142)
-  * patches: Fix a freeze with iris under stress test. (LP: #1990089)
-  * patches: Revert two commits causing kwin to eventually crash. (LP:
-    #2003339)
+  * New upstream release.
 
- -- Timo Aaltonen <tjaalton@debian.org>  Fri, 21 Apr 2023 14:51:10 +0300
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 03 May 2023 13:10:05 +0300
 
-mesa (22.2.5-0ubuntu0.1~22.04.1) jammy; urgency=medium
+mesa (23.0.2-1ubuntu1) lunar; urgency=medium
 
-  * Backport to jammy. (LP: #1991761)
+  [ Timo Aaltonen ]
+  * Merge from Debian.
 
- -- Timo Aaltonen <tjaalton@debian.org>  Thu, 15 Dec 2022 16:35:13 +0200
+  [ Juerg Haefliger ]
+  * freedreno: a690 support. (LP: #2015182)
 
-mesa (22.2.5-0ubuntu0.1) kinetic; urgency=medium
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 12 Apr 2023 10:24:25 +0300
 
-  * New upstream release. (LP: #1999336)
-  * rules: Enable building lima drivers on riscv64 and disable vulkan
-    swrast and draw-use-llvm. (LP: #1995137)
+mesa (23.0.2-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 11 Apr 2023 11:51:28 +0300
+
+mesa (23.0.1-1ubuntu1) lunar; urgency=medium
+
+  * Merge from Debian. (LP: #2009481)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 27 Mar 2023 20:00:13 +0300
+
+mesa (23.0.1-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Sun, 26 Mar 2023 12:25:46 +0300
+
+mesa (23.0.0-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 27 Feb 2023 12:30:15 +0200
+
+mesa (23.0.0~rc4-1) experimental; urgency=medium
+
+  [ Timo Aaltonen ]
+  * New upstream release candidate.
+  * copyright: Updated.
+  * rusticl-ftbfs.diff: Dropped, upstream.
+
+  [ Joshua Watt ]
+  * Add mesa-drm-shim package.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 09 Feb 2023 20:56:43 +0200
+
+mesa (23.0.0~rc1-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * patches: Refreshed.
+  * rusticl-ftbfs.diff: Fix rusticl dependencies to include valgrind.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 16 Jan 2023 11:20:46 +0200
+
+mesa (22.3.6-1ubuntu2) lunar; urgency=medium
+
+  * control: Add replaces/breaks to -dri for amber. (LP: #2006744)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 07 Mar 2023 10:24:33 +0200
+
+mesa (22.3.6-1ubuntu1) lunar; urgency=medium
+
+  * Merge from Debian.
+  * rules: Drop i386 from RUSTICL_ARCHS.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 28 Feb 2023 21:57:55 +0200
+
+mesa (22.3.6-1) unstable; urgency=medium
+
+  * New upstream release. (Closes: #1029731)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Sun, 26 Feb 2023 11:19:29 +0200
+
+mesa (22.3.5-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 09 Feb 2023 20:43:32 +0200
+
+mesa (22.3.4-1ubuntu1) lunar; urgency=medium
+
+  * Merge from Debian.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Sat, 28 Jan 2023 12:43:07 +0200
+
+mesa (22.3.4-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Sat, 28 Jan 2023 12:37:15 +0200
+
+mesa (22.3.3-1) unstable; urgency=medium
+
+  * New upstream release. (LP: #1988859)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 13 Jan 2023 10:23:37 +0200
+
+mesa (22.3.2-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 03 Jan 2023 14:53:02 +0200
+
+mesa (22.3.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * patches: Drop upstreamed patches.
+  * control: Use Rules-Requires-Root: no.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 15 Dec 2022 13:21:21 +0200
+
+mesa (22.3.0-3) unstable; urgency=medium
+
+  * control: Enable i915 gallium driver. (Closes: #1013311)
+  * rules: Enable intel_hasvk. (Closes: #1025864)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Sun, 11 Dec 2022 19:14:28 +0200
+
+mesa (22.3.0-2) unstable; urgency=medium
+
+  * patches: Import two upstream commits to fix crashes when libd3d12.so
+    can't be found. (Closes: #1025312)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 05 Dec 2022 16:34:36 +0200
+
+mesa (22.3.0-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 01 Dec 2022 12:07:06 +0200
+
+mesa (22.3.0~rc4-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 29 Nov 2022 10:19:44 +0200
+
+mesa (22.3.0~rc3-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * fix-symbols.diff: Dropped, upstream.
+  * rules: Limit anv ray-tracing support to amd64.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 18 Nov 2022 13:00:20 +0200
+
+mesa (22.2.4-1) unstable; urgency=medium
+
+  * New upstream release.
+  * rules: Enable building lima drivers on riscv64. (LP: #1995137)
+  * rules: Disable building llvmpipe on riscv64. (Closes: #1004039)
   * patches: Refreshed.
 
- -- Timo Aaltonen <tjaalton@debian.org>  Sun, 11 Dec 2022 21:06:42 +0200
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 18 Nov 2022 12:03:09 +0200
+
+mesa (22.3.0~rc1-3) experimental; urgency=medium
+
+  * control, rules: Enable intel vulkan raytracing support, add
+    python3-ply and libclc-15 to build-depends.
+  * rules: Fix rusticl logic.
+  * rules: Add some variables for architecture lists.
+  * rules: Drop the check for where vulkan loader exists, it's the same
+    list of archs now as for llvm.
+  * rules: Drop a duplicate check for llvm archs.
+  * rules, control.in: Add a template file for d/control, which makes
+    maintaining the llvm version and some arch lists easier.
+  * rules: Remove unused libgrl.a from the intel raytracing build.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 09 Nov 2022 13:37:20 +0200
+
+mesa (22.3.0~rc1-2) experimental; urgency=medium
+
+  * rules: Update list of archs without rustc.
+  * libegl1-mesa-dev.install: Updated.
+  * fix-symbols.diff: Fix a typo in glx symbols.
+  * libglx-mesa0.symbols: Updated.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 08 Nov 2022 15:47:05 +0200
+
+mesa (22.3.0~rc1-1) experimental; urgency=medium
+
+  [ Timo Aaltonen ]
+  * New upstream release candidate.
+  * rules: Drop removed gallium-xvmc flag.
+
+  [ Christopher Obbard ]
+  * Package rusticl, include in mesa-opencl-icd.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 08 Nov 2022 13:32:45 +0200
+
+mesa (22.2.5-0ubuntu1) lunar; urgency=medium
+
+  * New upstream release. (LP: #1999336)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Sun, 11 Dec 2022 19:50:00 +0200
+
+mesa (22.2.4-1ubuntu1) lunar; urgency=medium
+
+  * Merge from Debian.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 29 Nov 2022 10:59:31 +0200
+
+mesa (22.2.3-1) unstable; urgency=medium
+
+  * New upstream release. (Closes: #1022730)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 08 Nov 2022 12:17:23 +0200
+
+mesa (22.2.2-1) unstable; urgency=medium
+
+  * control: Bump build-depends on wayland-protocols. (Closes: #1021666)
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 21 Oct 2022 10:17:18 +0300
 
 mesa (22.2.1-1ubuntu1) kinetic; urgency=medium
 

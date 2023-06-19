@@ -26,8 +26,9 @@
  **************************************************************************/
 
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 #include "pipe/p_compiler.h"
+#include "util/macros.h"
 #include "util/u_cpu_detect.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
@@ -49,7 +50,7 @@
 #if GALLIVM_USE_NEW_PASS == 1
 #include <llvm-c/Transforms/PassBuilder.h>
 #elif GALLIVM_HAVE_CORO == 1
-#if LLVM_VERSION_MAJOR <= 8 && (defined(PIPE_ARCH_AARCH64) || defined (PIPE_ARCH_ARM) || defined(PIPE_ARCH_S390) || defined(PIPE_ARCH_MIPS64))
+#if LLVM_VERSION_MAJOR <= 8 && (DETECT_ARCH_AARCH64 || DETECT_ARCH_ARM || DETECT_ARCH_S390 || DETECT_ARCH_MIPS64)
 #include <llvm-c/Transforms/IPO.h>
 #endif
 #include <llvm-c/Transforms/Coroutines.h>
@@ -139,7 +140,7 @@ create_pass_manager(struct gallivm_state *gallivm)
    }
 
 #if GALLIVM_HAVE_CORO == 1
-#if LLVM_VERSION_MAJOR <= 8 && (defined(PIPE_ARCH_AARCH64) || defined (PIPE_ARCH_ARM) || defined(PIPE_ARCH_S390) || defined(PIPE_ARCH_MIPS64))
+#if LLVM_VERSION_MAJOR <= 8 && (DETECT_ARCH_AARCH64 || DETECT_ARCH_ARM || DETECT_ARCH_S390 || DETECT_ARCH_MIPS64)
    LLVMAddArgumentPromotionPass(gallivm->cgpassmgr);
    LLVMAddFunctionAttrsPass(gallivm->cgpassmgr);
 #endif
@@ -354,7 +355,7 @@ init_gallivm_state(struct gallivm_state *gallivm, const char *name,
    if (!gallivm->module)
       goto fail;
 
-#if defined(PIPE_ARCH_X86)
+#if DETECT_ARCH_X86
    lp_set_module_stack_alignment_override(gallivm->module, 4);
 #endif
 
@@ -418,6 +419,15 @@ fail:
    return FALSE;
 }
 
+unsigned
+lp_build_get_native_width(void)
+{
+   // Default to 256 until we're confident llvmpipe with 512 is as correct and not slower than 256
+   unsigned vector_width = MIN2(util_get_cpu_caps()->max_vector_bits, 256);
+
+   vector_width = debug_get_num_option("LP_NATIVE_VECTOR_WIDTH", vector_width);
+   return vector_width;
+}
 
 boolean
 lp_build_init(void)
@@ -440,51 +450,9 @@ lp_build_init(void)
 
    lp_set_target_options();
 
-   /* For simulating less capable machines */
-#ifdef DEBUG
-   if (debug_get_bool_option("LP_FORCE_SSE2", FALSE)) {
-      extern struct util_cpu_caps_t util_cpu_caps;
-      assert(util_cpu_caps.has_sse2);
-      util_cpu_caps.has_sse3 = 0;
-      util_cpu_caps.has_ssse3 = 0;
-      util_cpu_caps.has_sse4_1 = 0;
-      util_cpu_caps.has_sse4_2 = 0;
-      util_cpu_caps.has_avx = 0;
-      util_cpu_caps.has_avx2 = 0;
-      util_cpu_caps.has_f16c = 0;
-      util_cpu_caps.has_fma = 0;
-   }
-#endif
+   lp_native_vector_width = lp_build_get_native_width();
 
-   if (util_get_cpu_caps()->has_avx2 || util_get_cpu_caps()->has_avx) {
-      lp_native_vector_width = 256;
-   } else {
-      /* Leave it at 128, even when no SIMD extensions are available.
-       * Really needs to be a multiple of 128 so can fit 4 floats.
-       */
-      lp_native_vector_width = 128;
-   }
-
-   lp_native_vector_width = debug_get_num_option("LP_NATIVE_VECTOR_WIDTH",
-                                                 lp_native_vector_width);
-
-#if LLVM_VERSION_MAJOR < 4
-   if (lp_native_vector_width <= 128) {
-      /* Hide AVX support, as often LLVM AVX intrinsics are only guarded by
-       * "util_get_cpu_caps()->has_avx" predicate, and lack the
-       * "lp_native_vector_width > 128" predicate. And also to ensure a more
-       * consistent behavior, allowing one to test SSE2 on AVX machines.
-       * XXX: should not play games with util_cpu_caps directly as it might
-       * get used for other things outside llvm too.
-       */
-      util_get_cpu_caps()->has_avx = 0;
-      util_get_cpu_caps()->has_avx2 = 0;
-      util_get_cpu_caps()->has_f16c = 0;
-      util_get_cpu_caps()->has_fma = 0;
-   }
-#endif
-
-#ifdef PIPE_ARCH_PPC_64
+#if DETECT_ARCH_PPC_64
    /* Set the NJ bit in VSCR to 0 so denormalized values are handled as
     * specified by IEEE standard (PowerISA 2.06 - Section 6.3). This guarantees
     * that some rounding and half-float to float handling does not round
@@ -571,6 +539,14 @@ gallivm_verify_function(struct gallivm_state *gallivm,
    }
 }
 
+void lp_init_clock_hook(struct gallivm_state *gallivm)
+{
+   if (gallivm->get_time_hook)
+      return;
+
+   LLVMTypeRef get_time_type = LLVMFunctionType(LLVMInt64TypeInContext(gallivm->context), NULL, 0, 1);
+   gallivm->get_time_hook = LLVMAddFunction(gallivm->module, "get_time_hook", get_time_type);
+}
 
 /**
  * Compile a module.
@@ -653,7 +629,7 @@ gallivm_compile_module(struct gallivm_state *gallivm)
 
    /* Disable frame pointer omission on debug/profile builds */
    /* XXX: And workaround http://llvm.org/PR21435 */
-#if defined(DEBUG) || defined(PROFILE) || defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if defined(DEBUG) || defined(PROFILE) || DETECT_ARCH_X86 || DETECT_ARCH_X86_64
       LLVMAddTargetDependentFunctionAttr(func, "no-frame-pointer-elim", "true");
       LLVMAddTargetDependentFunctionAttr(func, "no-frame-pointer-elim-non-leaf", "true");
 #endif
@@ -695,6 +671,8 @@ gallivm_compile_module(struct gallivm_state *gallivm)
    lp_init_printf_hook(gallivm);
    LLVMAddGlobalMapping(gallivm->engine, gallivm->debug_printf_hook, debug_printf);
 
+   lp_init_clock_hook(gallivm);
+   LLVMAddGlobalMapping(gallivm->engine, gallivm->get_time_hook, os_time_get_nano);
 
    lp_build_coro_add_malloc_hooks(gallivm);
 

@@ -32,7 +32,7 @@
 #include "compiler/nir/nir_serialize.h"
 
 #include "util/blob.h"
-#include "util/debug.h"
+#include "util/u_debug.h"
 #include "util/disk_cache.h"
 #include "util/hash_table.h"
 #include "util/set.h"
@@ -606,7 +606,7 @@ vk_pipeline_cache_create(struct vk_device *device,
    simple_mtx_init(&cache->lock, mtx_plain);
 
    if (info->force_enable ||
-       env_var_as_boolean("VK_ENABLE_PIPELINE_CACHE", true)) {
+       debug_get_bool_option("VK_ENABLE_PIPELINE_CACHE", true)) {
       cache->object_cache = _mesa_set_create(NULL, object_key_hash,
                                              object_keys_equal);
    }
@@ -714,7 +714,10 @@ vk_common_GetPipelineCacheData(VkDevice _device,
          intptr_t data_size_resv = blob_reserve_uint32(&blob);
          blob_write_bytes(&blob, object->key_data, object->key_size);
 
-         blob_align(&blob, VK_PIPELINE_CACHE_BLOB_ALIGN);
+         if (!blob_align(&blob, VK_PIPELINE_CACHE_BLOB_ALIGN)) {
+            result = VK_INCOMPLETE;
+            break;
+         }
 
          uint32_t data_size;
          if (!vk_pipeline_cache_object_serialize(cache, object,
@@ -734,6 +737,8 @@ vk_common_GetPipelineCacheData(VkDevice _device,
 
          assert(data_size_resv >= 0);
          blob_overwrite_uint32(&blob, data_size_resv, data_size);
+
+         count++;
       }
    }
 
