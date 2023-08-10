@@ -81,6 +81,7 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"vm", DBG(VM), "Print virtual addresses when creating resources"},
    {"cache_stats", DBG(CACHE_STATS), "Print shader cache statistics."},
    {"ib", DBG(IB), "Print command buffers."},
+   {"elements", DBG(VERTEX_ELEMENTS), "Print vertex elements."},
 
    /* Driver options: */
    {"nowc", DBG(NO_WC), "Disable GTT write combining"},
@@ -147,8 +148,6 @@ bool si_init_compiler(struct si_screen *sscreen, struct ac_llvm_compiler *compil
       (sscreen->debug_flags & DBG(CHECK_IR) ? AC_TM_CHECK_IR : 0) |
       (create_low_opt_compiler ? AC_TM_CREATE_LOW_OPT : 0);
 
-   ac_init_llvm_once();
-
    if (!ac_init_llvm_compiler(compiler, sscreen->info.family, tm_options))
       return false;
 
@@ -204,8 +203,14 @@ static void si_destroy_context(struct pipe_context *context)
    if (sctx->gfx_level >= GFX10 && sctx->has_graphics)
       gfx10_destroy_query(sctx);
 
-   if (sctx->thread_trace)
+   if (sctx->thread_trace) {
+      struct si_screen *sscreen = sctx->screen;
+      if (sscreen->info.has_stable_pstate && sscreen->b.num_contexts == 1 &&
+          !(sctx->context_flags & SI_CONTEXT_FLAG_AUX))
+          sscreen->ws->cs_set_pstate(&sctx->gfx_cs, RADEON_CTX_PSTATE_NONE);
+
       si_destroy_thread_trace(sctx);
+   }
 
    pipe_resource_reference(&sctx->esgs_ring, NULL);
    pipe_resource_reference(&sctx->gsvs_ring, NULL);
@@ -221,6 +226,7 @@ static void si_destroy_context(struct pipe_context *context)
    si_resource_reference(&sctx->wait_mem_scratch_tmz, NULL);
    si_resource_reference(&sctx->small_prim_cull_info_buf, NULL);
    si_resource_reference(&sctx->pipeline_stats_query_buf, NULL);
+   si_resource_reference(&sctx->last_const_upload_buffer, NULL);
 
    if (sctx->cs_preamble_state)
       si_pm4_free_state(sctx, sctx->cs_preamble_state, ~0);
@@ -356,6 +362,13 @@ static void si_destroy_context(struct pipe_context *context)
    if (!(sctx->context_flags & SI_CONTEXT_FLAG_AUX))
       p_atomic_dec(&context->screen->num_contexts);
 
+   if (sctx->cs_blit_shaders) {
+      hash_table_foreach(sctx->cs_blit_shaders, entry) {
+         context->delete_compute_state(context, entry->data);
+      }
+      _mesa_hash_table_destroy(sctx->cs_blit_shaders, NULL);
+   }
+
    FREE(sctx);
 }
 
@@ -467,7 +480,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    struct si_context *sctx = CALLOC_STRUCT(si_context);
    struct radeon_winsys *ws = sscreen->ws;
    int shader, i;
-   bool stop_exec_on_failure = (flags & PIPE_CONTEXT_LOSE_CONTEXT_ON_RESET) != 0;
    enum radeon_ctx_priority priority;
 
    if (!sctx) {
@@ -529,7 +541,8 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    }
 
    ws->cs_create(&sctx->gfx_cs, sctx->ctx, sctx->has_graphics ? AMD_IP_GFX : AMD_IP_COMPUTE,
-                 (void *)si_flush_gfx_cs, sctx, stop_exec_on_failure);
+                 (void *)si_flush_gfx_cs, sctx,
+                 flags & (PIPE_CONTEXT_LOSE_CONTEXT_ON_RESET | SI_CONTEXT_FLAG_AUX));
 
    /* Initialize private allocators. */
    u_suballocator_init(&sctx->allocator_zeroed_memory, &sctx->b, 128 * 1024, 0,
@@ -827,6 +840,11 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
    }
 
    sctx->initial_gfx_cs_size = sctx->gfx_cs.current.cdw;
+
+   sctx->cs_blit_shaders = _mesa_hash_table_create_u32_keys(NULL);
+   if (!sctx->cs_blit_shaders)
+      goto fail;
+
    return &sctx->b;
 fail:
    fprintf(stderr, "radeonsi: Failed to create a context.\n");
@@ -858,6 +876,11 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen, v
    ctx = si_create_context(screen, flags);
 
    if (ctx && sscreen->info.gfx_level >= GFX9 && sscreen->debug_flags & DBG(SQTT)) {
+      /* Auto-enable stable performance profile if possible. */
+      if (sscreen->info.has_stable_pstate && screen->num_contexts == 1 &&
+          sscreen->ws->cs_set_pstate(&((struct si_context *)ctx)->gfx_cs, RADEON_CTX_PSTATE_PEAK)) {
+      }
+
       if (ac_check_profile_state(&sscreen->info)) {
          fprintf(stderr, "radeonsi: Canceling RGP trace request as a hang condition has been "
                          "detected. Force the GPU into a profiling mode with e.g. "
@@ -891,6 +914,7 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen, v
                                        si_create_fence : NULL,
                                  .is_resource_busy = si_is_resource_busy,
                                  .driver_calls_flush_notify = true,
+                                 .unsynchronized_create_fence_fd = true,
                               },
                               &((struct si_context *)ctx)->tc);
 
@@ -1116,6 +1140,8 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
                   sscreen->options.enable_sam,
                   sscreen->options.disable_sam);
 
+   sscreen->info.smart_access_memory = false; /* VRAM has slower CPU access */
+
    if (sscreen->info.gfx_level >= GFX9) {
       sscreen->se_tile_repeat = 32 * sscreen->info.max_se;
    } else {
@@ -1192,7 +1218,7 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
              1 << util_logbase2(sscreen->force_aniso));
    }
 
-   (void)mtx_init(&sscreen->aux_context_lock, mtx_recursive);
+   (void)mtx_init(&sscreen->aux_context_lock, mtx_plain | mtx_recursive);
    (void)simple_mtx_init(&sscreen->async_compute_context_lock, mtx_plain);
    (void)simple_mtx_init(&sscreen->gpu_load_mutex, mtx_plain);
    (void)simple_mtx_init(&sscreen->gds_mutex, mtx_plain);
@@ -1460,8 +1486,20 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
 
 struct pipe_screen *radeonsi_screen_create(int fd, const struct pipe_screen_config *config)
 {
-   drmVersionPtr version = drmGetVersion(fd);
    struct radeon_winsys *rw = NULL;
+   drmVersionPtr version;
+
+   version = drmGetVersion(fd);
+   if (!version)
+     return NULL;
+
+   /* LLVM must be initialized before util_queue because both u_queue and LLVM call atexit,
+    * and LLVM must call it first because its atexit handler executes C++ destructors,
+    * which must be done after our compiler threads using LLVM in u_queue are finished
+    * by their atexit handler. Since atexit handlers are called in the reverse order,
+    * LLVM must be initialized first, followed by u_queue.
+    */
+   ac_init_llvm_once();
 
    driParseConfigFiles(config->options, config->options_info, 0, "radeonsi",
                        NULL, NULL, NULL, 0, NULL, 0);

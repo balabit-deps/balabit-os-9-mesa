@@ -34,7 +34,7 @@
 
 #include "tgsi/tgsi_parse.h"
 
-#include "pipe/p_config.h"
+#include "util/detect.h"
 
 #include "r300_cb.h"
 #include "r300_context.h"
@@ -919,7 +919,7 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
 
     if (state->width > max_width || state->height > max_height) {
         fprintf(stderr, "r300: Implementation error: Render targets are too "
-        "big in %s, refusing to bind framebuffer state!\n", __FUNCTION__);
+        "big in %s, refusing to bind framebuffer state!\n", __func__);
         return;
     }
 
@@ -1064,7 +1064,8 @@ static void* r300_create_fs_state(struct pipe_context* pipe,
     tgsi_scan_shader(fs->state.tokens, &info);
     for (int i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++) {
         if (info.sampler_targets[i] == TGSI_TEXTURE_SHADOW1D ||
-            info.sampler_targets[i] == TGSI_TEXTURE_SHADOW2D) {
+            info.sampler_targets[i] == TGSI_TEXTURE_SHADOW2D ||
+            info.sampler_targets[i] == TGSI_TEXTURE_SHADOWRECT) {
             precompile_state.unit[i].compare_mode_enabled = true;
             precompile_state.unit[i].texture_compare_func = PIPE_FUNC_LESS;
         }

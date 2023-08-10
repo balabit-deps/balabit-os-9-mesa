@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2086 # we want word splitting
 
 set -ex
 
@@ -39,6 +40,12 @@ cmake -S /VK-GL-CTS -B . -G Ninja \
 ninja modules/egl/deqp-egl
 cp /deqp/modules/egl/deqp-egl /deqp/modules/egl/deqp-egl-x11
 
+cmake -S /VK-GL-CTS -B . -G Ninja \
+      -DDEQP_TARGET=wayland \
+      -DCMAKE_BUILD_TYPE=Release \
+      $EXTRA_CMAKE_ARGS
+ninja modules/egl/deqp-egl
+cp /deqp/modules/egl/deqp-egl /deqp/modules/egl/deqp-egl-wayland
 
 cmake -S /VK-GL-CTS -B . -G Ninja \
       -DDEQP_TARGET=${DEQP_TARGET:-x11_glx} \
@@ -67,6 +74,9 @@ cp \
 cp \
     /deqp/external/openglcts/modules/gl_cts/data/mustpass/gl/khronos_mustpass/4.6.1.x/*-master.txt \
     /deqp/mustpass/.
+cp \
+    /deqp/external/openglcts/modules/gl_cts/data/mustpass/gl/khronos_mustpass_single/4.6.1.x/*-single.txt \
+    /deqp/mustpass/.
 
 # Save *some* executor utils, but otherwise strip things down
 # to reduct deqp build size:
@@ -84,10 +94,11 @@ rm -rf /deqp/external/openglcts/modules/cts-runner
 rm -rf /deqp/modules/internal
 rm -rf /deqp/execserver
 rm -rf /deqp/framework
+# shellcheck disable=SC2038,SC2185 # TODO: rewrite find
 find -iname '*cmake*' -o -name '*ninja*' -o -name '*.o' -o -name '*.a' | xargs rm -rf
 ${STRIP_CMD:-strip} external/vulkancts/modules/vulkan/deqp-vk
 ${STRIP_CMD:-strip} external/openglcts/modules/glcts
 ${STRIP_CMD:-strip} modules/*/deqp-*
-du -sh *
+du -sh ./*
 rm -rf /VK-GL-CTS
 popd

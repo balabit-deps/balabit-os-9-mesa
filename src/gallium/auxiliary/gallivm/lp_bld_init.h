@@ -64,8 +64,12 @@ struct gallivm_state
 
    LLVMTypeRef coro_malloc_hook_type;
    LLVMTypeRef coro_free_hook_type;
+
+   LLVMValueRef get_time_hook;
 };
 
+unsigned
+lp_build_get_native_width(void);
 
 boolean
 lp_build_init(void);
@@ -94,6 +98,7 @@ gallivm_jit_function(struct gallivm_state *gallivm,
 
 unsigned gallivm_get_perf_flags(void);
 
+void lp_init_clock_hook(struct gallivm_state *gallivm);
 #ifdef __cplusplus
 }
 #endif

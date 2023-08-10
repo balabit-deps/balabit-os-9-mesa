@@ -1624,6 +1624,7 @@ brw_send_indirect_split_message(struct brw_codegen *p,
                                 unsigned desc_imm,
                                 struct brw_reg ex_desc,
                                 unsigned ex_desc_imm,
+                                bool ex_desc_scratch,
                                 bool eot);
 
 void brw_ff_sync(struct brw_codegen *p,
@@ -1860,6 +1861,10 @@ brw_MOV_reloc_imm(struct brw_codegen *p,
                   struct brw_reg dst,
                   enum brw_reg_type src_type,
                   uint32_t id);
+
+unsigned
+brw_num_sources_from_inst(const struct brw_isa_info *isa,
+                          const brw_inst *inst);
 
 /***********************************************************************
  * brw_eu_util.c:
