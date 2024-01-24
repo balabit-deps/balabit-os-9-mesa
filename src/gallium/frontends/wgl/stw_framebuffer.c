@@ -37,6 +37,7 @@
 #include "frontend/api.h"
 
 #include <GL/gl.h>
+#include "stw_gdishim.h"
 #include "gldrv.h"
 #include "stw_framebuffer.h"
 #include "stw_device.h"
@@ -171,18 +172,20 @@ stw_framebuffer_get_size(struct stw_framebuffer *fb)
    }
 
    if (width != fb->width || height != fb->height) {
-      fb->must_resize = TRUE;
+      fb->must_resize = true;
       fb->width = width;
       fb->height = height;
    }
 
    client_pos.x = 0;
    client_pos.y = 0;
+#ifndef _GAMING_XBOX
    if (ClientToScreen(fb->hWnd, &client_pos) &&
        GetWindowRect(fb->hWnd, &window_rect)) {
       fb->client_rect.left = client_pos.x - window_rect.left;
       fb->client_rect.top  = client_pos.y - window_rect.top;
    }
+#endif
 
    fb->client_rect.right  = fb->client_rect.left + fb->width;
    fb->client_rect.bottom = fb->client_rect.top  + fb->height;
@@ -204,6 +207,7 @@ stw_framebuffer_get_size(struct stw_framebuffer *fb)
 }
 
 
+#ifndef _GAMING_XBOX
 /**
  * @sa http://msdn.microsoft.com/en-us/library/ms644975(VS.85).aspx
  * @sa http://msdn.microsoft.com/en-us/library/ms644960(VS.85).aspx
@@ -263,6 +267,40 @@ stw_call_window_proc(int nCode, WPARAM wParam, LPARAM lParam)
 
    return CallNextHookEx(tls_data->hCallWndProcHook, nCode, wParam, lParam);
 }
+#else
+LRESULT CALLBACK
+stw_call_window_proc_xbox(HWND hWnd, UINT message,
+                          WPARAM wParam, LPARAM lParam)
+{
+   WNDPROC prev_wndproc = NULL;
+
+   /* We check that the stw_dev object is initialized before we try to do
+    * anything with it.  Otherwise, in multi-threaded programs there's a
+    * chance of executing this code before the stw_dev object is fully
+    * initialized.
+    */
+   if (stw_dev && stw_dev->initialized) {
+      if (message == WM_DESTROY) {
+         stw_lock_framebuffers(stw_dev);
+         struct stw_framebuffer *fb = stw_framebuffer_from_hwnd_locked(hWnd);
+         if (fb) {
+            struct stw_context *current_context = stw_current_context();
+            struct st_context *st = current_context &&
+               current_context->current_framebuffer == fb ? current_context->st : NULL;
+            prev_wndproc = fb->prev_wndproc;
+            stw_framebuffer_release_locked(fb, st);
+         }
+         stw_unlock_framebuffers(stw_dev);
+      }
+   }
+
+   /* Pass the parameters up the chain, if applicable */
+   if (prev_wndproc)
+      return prev_wndproc(hWnd, message, wParam, lParam);
+
+   return 0;
+}
+#endif /* _GAMING_XBOX */
 
 
 /**
@@ -285,6 +323,10 @@ stw_framebuffer_create(HWND hWnd, const struct stw_pixelformat_info *pfi, enum s
    if (stw_dev->stw_winsys->create_framebuffer)
       fb->winsys_framebuffer =
          stw_dev->stw_winsys->create_framebuffer(stw_dev->screen, hWnd, pfi->iPixelFormat);
+
+#ifdef _GAMING_XBOX
+   fb->prev_wndproc = (WNDPROC)SetWindowLongPtr(hWnd, GWLP_WNDPROC, (LONG_PTR)&stw_call_window_proc_xbox);
+#endif
 
    /*
     * We often need a displayable pixel format to make GDI happy. Set it
@@ -311,7 +353,7 @@ stw_framebuffer_create(HWND hWnd, const struct stw_pixelformat_info *pfi, enum s
     * a non-zero framebuffer size at all times.
     */
 
-   fb->must_resize = TRUE;
+   fb->must_resize = true;
    fb->width  = 1;
    fb->height = 1;
    fb->client_rect.left   = 0;
@@ -479,12 +521,12 @@ DrvSetPixelFormat(HDC hdc, LONG iPixelFormat)
    struct stw_framebuffer *fb;
 
    if (!stw_dev)
-      return FALSE;
+      return false;
 
    index = (uint) iPixelFormat - 1;
    count = stw_pixelformat_get_count(hdc);
    if (index >= count)
-      return FALSE;
+      return false;
 
    fb = stw_framebuffer_from_hdc_locked(hdc);
    if (fb) {
@@ -492,7 +534,7 @@ DrvSetPixelFormat(HDC hdc, LONG iPixelFormat)
        * SetPixelFormat must be called only once.  However ignore
        * pbuffers, for which the framebuffer object is created first.
        */
-      boolean bPbuffer = fb->owner == STW_FRAMEBUFFER_PBUFFER;
+      bool bPbuffer = fb->owner == STW_FRAMEBUFFER_PBUFFER;
 
       stw_framebuffer_unlock( fb );
 
@@ -503,7 +545,7 @@ DrvSetPixelFormat(HDC hdc, LONG iPixelFormat)
 
    fb = stw_framebuffer_create(WindowFromDC(hdc), pfi, STW_FRAMEBUFFER_WGL_WINDOW, stw_dev->fscreen);
    if (!fb) {
-      return FALSE;
+      return false;
    }
 
    stw_framebuffer_unlock( fb );
@@ -518,7 +560,7 @@ DrvSetPixelFormat(HDC hdc, LONG iPixelFormat)
       }
    }
 
-   return TRUE;
+   return true;
 }
 
 
@@ -548,11 +590,11 @@ DrvPresentBuffers(HDC hdc, LPPRESENTBUFFERS data)
    struct pipe_resource *res;
 
    if (!stw_dev)
-      return FALSE;
+      return false;
 
    fb = stw_framebuffer_from_hdc( hdc );
    if (fb == NULL)
-      return FALSE;
+      return false;
 
    screen = stw_dev->screen;
    ctx = stw_current_context();
@@ -594,7 +636,7 @@ DrvPresentBuffers(HDC hdc, LPPRESENTBUFFERS data)
 
    stw_framebuffer_unlock(fb);
 
-   return TRUE;
+   return true;
 }
 
 
@@ -646,7 +688,7 @@ stw_framebuffer_present_locked(HDC hdc,
       stw_notify_current_locked(fb);
       stw_framebuffer_unlock(fb);
 
-      return TRUE;
+      return true;
    }
 }
 
@@ -691,7 +733,7 @@ stw_framebuffer_swap_locked(HDC hdc, struct stw_framebuffer *fb)
    struct stw_context *ctx;
    if (!(fb->pfi->pfd.dwFlags & PFD_DOUBLEBUFFER)) {
       stw_framebuffer_unlock(fb);
-      return TRUE;
+      return true;
    }
 
    ctx = stw_current_context();
@@ -725,11 +767,11 @@ DrvSwapBuffers(HDC hdc)
    struct stw_framebuffer *fb;
 
    if (!stw_dev)
-      return FALSE;
+      return false;
 
    fb = stw_framebuffer_from_hdc( hdc );
    if (fb == NULL)
-      return FALSE;
+      return false;
 
    return stw_framebuffer_swap_locked(hdc, fb);
 }
@@ -741,5 +783,5 @@ DrvSwapLayerBuffers(HDC hdc, UINT fuPlanes)
    if (fuPlanes & WGL_SWAP_MAIN_PLANE)
       return DrvSwapBuffers(hdc);
 
-   return FALSE;
+   return false;
 }

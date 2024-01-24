@@ -378,6 +378,35 @@ pan_blitter_get_blend_shaders(struct panfrost_device *dev, unsigned rt_count,
 #endif
 }
 
+/*
+ * Early Mali GPUs did not respect sampler LOD clamps or bias, so the Midgard
+ * compiler inserts lowering code with a load_sampler_lod_parameters_pan sysval
+ * that we need to lower. Our samplers do not use LOD clamps or bias, so we
+ * lower to the identity settings and let constant folding get rid of the
+ * unnecessary lowering.
+ */
+static bool
+lower_sampler_parameters(nir_builder *b, nir_instr *instr, UNUSED void *data)
+{
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   if (intr->intrinsic != nir_intrinsic_load_sampler_lod_parameters_pan)
+      return false;
+
+   const nir_const_value constants[4] = {
+      nir_const_value_for_float(0.0f, 32),     /* min_lod */
+      nir_const_value_for_float(INFINITY, 32), /* max_lod */
+      nir_const_value_for_float(0.0f, 32),     /* lod_bias */
+   };
+
+   b->cursor = nir_after_instr(instr);
+   nir_ssa_def_rewrite_uses(&intr->dest.ssa,
+                            nir_build_imm(b, 3, 32, constants));
+   return true;
+}
+
 static const struct pan_blit_shader_data *
 pan_blitter_get_blit_shader(struct panfrost_device *dev,
                             const struct pan_blit_shader_key *key)
@@ -520,27 +549,23 @@ pan_blitter_get_blit_shader(struct panfrost_device *dev,
             tex->is_array = key->surfaces[i].array;
             tex->sampler_dim = sampler_dim;
 
-            tex->src[0].src_type = nir_tex_src_coord;
-            tex->src[0].src = nir_src_for_ssa(nir_f2i32(&b, coord));
+            tex->src[0] =
+               nir_tex_src_for_ssa(nir_tex_src_coord, nir_f2i32(&b, coord));
             tex->coord_components = coord_comps;
 
-            tex->src[1].src_type = nir_tex_src_ms_index;
-            tex->src[1].src = nir_src_for_ssa(nir_imm_int(&b, s));
+            tex->src[1] =
+               nir_tex_src_for_ssa(nir_tex_src_ms_index, nir_imm_int(&b, s));
 
-            tex->src[2].src_type = nir_tex_src_lod;
-            tex->src[2].src = nir_src_for_ssa(nir_imm_int(&b, 0));
-            nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32, NULL);
+            tex->src[2] =
+               nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(&b, 0));
+            nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32);
             nir_builder_instr_insert(&b, &tex->instr);
 
             res = res ? nir_fadd(&b, res, &tex->dest.ssa) : &tex->dest.ssa;
          }
 
-         if (base_type == nir_type_float) {
-            unsigned type_sz =
-               nir_alu_type_get_type_size(key->surfaces[i].type);
-            res = nir_fmul(&b, res,
-                           nir_imm_floatN_t(&b, 1.0f / nsamples, type_sz));
-         }
+         if (base_type == nir_type_float)
+            res = nir_fmul_imm(&b, res, 1.0f / nsamples);
       } else {
          nir_tex_instr *tex = nir_tex_instr_create(b.shader, ms ? 3 : 1);
 
@@ -552,24 +577,23 @@ pan_blitter_get_blit_shader(struct panfrost_device *dev,
          if (ms) {
             tex->op = nir_texop_txf_ms;
 
-            tex->src[0].src_type = nir_tex_src_coord;
-            tex->src[0].src = nir_src_for_ssa(nir_f2i32(&b, coord));
+            tex->src[0] =
+               nir_tex_src_for_ssa(nir_tex_src_coord, nir_f2i32(&b, coord));
             tex->coord_components = coord_comps;
 
-            tex->src[1].src_type = nir_tex_src_ms_index;
-            tex->src[1].src = nir_src_for_ssa(nir_load_sample_id(&b));
+            tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_ms_index,
+                                              nir_load_sample_id(&b));
 
-            tex->src[2].src_type = nir_tex_src_lod;
-            tex->src[2].src = nir_src_for_ssa(nir_imm_int(&b, 0));
+            tex->src[2] =
+               nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(&b, 0));
          } else {
             tex->op = nir_texop_txl;
 
-            tex->src[0].src_type = nir_tex_src_coord;
-            tex->src[0].src = nir_src_for_ssa(coord);
+            tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_coord, coord);
             tex->coord_components = coord_comps;
          }
 
-         nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32, NULL);
+         nir_ssa_dest_init(&tex->instr, &tex->dest, 4, 32);
          nir_builder_instr_insert(&b, &tex->instr);
          res = &tex->dest.ssa;
       }
@@ -589,7 +613,6 @@ pan_blitter_get_blit_shader(struct panfrost_device *dev,
       .gpu_id = dev->gpu_id,
       .is_blit = true,
       .no_idvs = true,
-      .fixed_sysval_ubo = -1,
    };
    struct util_dynarray binary;
 
@@ -602,10 +625,15 @@ pan_blitter_get_blit_shader(struct panfrost_device *dev,
    for (unsigned i = 0; i < active_count; ++i)
       BITSET_SET(b.shader->info.textures_used, i);
 
-   GENX(pan_shader_compile)(b.shader, &inputs, &binary, &shader->info);
+   pan_shader_preprocess(b.shader, inputs.gpu_id);
 
-   /* Blit shaders shouldn't have sysvals */
-   assert(shader->info.sysvals.sysval_count == 0);
+   if (PAN_ARCH == 4) {
+      NIR_PASS_V(b.shader, nir_shader_instructions_pass,
+                 lower_sampler_parameters,
+                 nir_metadata_block_index | nir_metadata_dominance, NULL);
+   }
+
+   GENX(pan_shader_compile)(b.shader, &inputs, &binary, &shader->info);
 
    shader->key = *key;
    shader->address =

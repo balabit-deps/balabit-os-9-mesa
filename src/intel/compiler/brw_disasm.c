@@ -1548,7 +1548,7 @@ imm(FILE *file, const struct brw_isa_info *isa, enum brw_reg_type type,
       }
       break;
    case BRW_REGISTER_TYPE_DF:
-      format(file, "0x%016"PRIx64"DF", brw_inst_bits(inst, 127, 64));
+      format(file, "0x%016"PRIx64"DF", brw_inst_imm_uq(devinfo, inst));
       pad(file, 48);
       format(file, "/* %-gDF */", brw_inst_imm_df(devinfo, inst));
       break;
@@ -1880,18 +1880,18 @@ lsc_disassemble_ex_desc(const struct intel_device_info *devinfo,
    const unsigned addr_type = lsc_msg_desc_addr_type(devinfo, imm_desc);
    switch (addr_type) {
    case LSC_ADDR_SURFTYPE_FLAT:
-      format(file, "base_offset %u ",
+      format(file, " base_offset %u ",
              lsc_flat_ex_desc_base_offset(devinfo, imm_ex_desc));
       break;
    case LSC_ADDR_SURFTYPE_BSS:
    case LSC_ADDR_SURFTYPE_SS:
-      format(file, "surface_state_index %u ",
+      format(file, " surface_state_index %u ",
              lsc_bss_ex_desc_index(devinfo, imm_ex_desc));
       break;
    case LSC_ADDR_SURFTYPE_BTI:
-      format(file, "BTI %u ",
+      format(file, " BTI %u ",
              lsc_bti_ex_desc_index(devinfo, imm_ex_desc));
-      format(file, "base_offset %u ",
+      format(file, " base_offset %u ",
              lsc_bti_ex_desc_base_offset(devinfo, imm_ex_desc));
       break;
    default:
@@ -1964,7 +1964,10 @@ brw_disassemble_inst(FILE *file, const struct brw_isa_info *isa,
       err |= control(file, "function", sync_function,
                      brw_inst_cond_modifier(devinfo, inst), NULL);
 
-   } else if (!is_send(opcode)) {
+   } else if (!is_send(opcode) &&
+              (devinfo->ver < 12 ||
+               brw_inst_src0_reg_file(devinfo, inst) != BRW_IMMEDIATE_VALUE ||
+               type_sz(brw_inst_src0_type(devinfo, inst)) < 8)) {
       err |= control(file, "conditional modifier", conditional_modifier,
                      brw_inst_cond_modifier(devinfo, inst), NULL);
 
@@ -2466,11 +2469,13 @@ brw_disassemble_inst(FILE *file, const struct brw_isa_info *isa,
          if (space)
             string(file, " ");
       }
+      if (devinfo->verx10 >= 125 && brw_inst_send_ex_bso(devinfo, inst))
+         format(file, " ex_bso");
       if (brw_sfid_is_lsc(sfid)) {
             lsc_disassemble_ex_desc(devinfo, imm_desc, imm_ex_desc, file);
       } else {
          if (has_imm_desc)
-            format(file, "mlen %u", brw_message_desc_mlen(devinfo, imm_desc));
+            format(file, " mlen %u", brw_message_desc_mlen(devinfo, imm_desc));
          if (has_imm_ex_desc) {
             format(file, " ex_mlen %u",
                    brw_message_ex_desc_ex_mlen(devinfo, imm_ex_desc));

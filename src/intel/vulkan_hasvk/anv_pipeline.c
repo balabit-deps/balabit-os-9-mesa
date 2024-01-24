@@ -93,7 +93,7 @@ anv_shader_stage_to_nir(struct anv_device *device,
          .physical_storage_buffer_address = pdevice->has_a64_buffer_access,
          .post_depth_coverage = pdevice->info.ver >= 9,
          .runtime_descriptor_array = true,
-         .float_controls = pdevice->info.ver >= 8,
+         .float_controls = true,
          .shader_clock = true,
          .shader_viewport_index_layer = true,
          .stencil_export = pdevice->info.ver >= 9,
@@ -126,6 +126,9 @@ anv_shader_stage_to_nir(struct anv_device *device,
        * with certain code / code generators.
        */
       .shared_addr_format = nir_address_format_32bit_offset,
+
+      .min_ubo_alignment = ANV_UBO_ALIGNMENT,
+      .min_ssbo_alignment = ANV_SSBO_ALIGNMENT,
    };
 
    nir_shader *nir;
@@ -154,8 +157,6 @@ anv_shader_stage_to_nir(struct anv_device *device,
       .is_vulkan = true,
    };
    NIR_PASS(_, nir, nir_opt_access, &opt_access_options);
-
-   NIR_PASS(_, nir, nir_lower_frexp);
 
    /* Vulkan uses the separate-shader linking model */
    nir->info.separate_shader = true;
@@ -360,7 +361,8 @@ populate_wm_prog_key(const struct anv_graphics_pipeline *pipeline,
     * code to workaround the issue that hardware disables alpha to coverage
     * when there is SampleMask output.
     */
-   key->alpha_to_coverage = ms != NULL && ms->alpha_to_coverage_enable;
+   key->alpha_to_coverage = ms != NULL && ms->alpha_to_coverage_enable ?
+      BRW_ALWAYS : BRW_NEVER;
 
    /* Vulkan doesn't support fixed-function alpha test */
    key->alpha_test_replicate_alpha = false;
@@ -370,9 +372,11 @@ populate_wm_prog_key(const struct anv_graphics_pipeline *pipeline,
        * harmless to compute it and then let dead-code take care of it.
        */
       if (ms->rasterization_samples > 1) {
-         key->persample_interp = ms->sample_shading_enable &&
-            (ms->min_sample_shading * ms->rasterization_samples) > 1;
-         key->multisample_fbo = true;
+         key->persample_interp =
+            (ms->sample_shading_enable &&
+             (ms->min_sample_shading * ms->rasterization_samples) > 1) ?
+            BRW_ALWAYS : BRW_NEVER;
+         key->multisample_fbo = BRW_ALWAYS;
       }
 
       if (device->physical->instance->sample_mask_out_opengl_behaviour)
@@ -448,7 +452,7 @@ anv_pipeline_hash_graphics(struct anv_graphics_pipeline *pipeline,
    if (layout)
       _mesa_sha1_update(&ctx, layout->sha1, sizeof(layout->sha1));
 
-   const bool rba = pipeline->base.device->robust_buffer_access;
+   const bool rba = pipeline->base.device->vk.enabled_features.robustBufferAccess;
    _mesa_sha1_update(&ctx, &rba, sizeof(rba));
 
    for (uint32_t s = 0; s < ANV_GRAPHICS_SHADER_STAGE_COUNT; s++) {
@@ -476,7 +480,7 @@ anv_pipeline_hash_compute(struct anv_compute_pipeline *pipeline,
 
    const struct anv_device *device = pipeline->base.device;
 
-   const bool rba = device->robust_buffer_access;
+   const bool rba = device->vk.enabled_features.robustBufferAccess;
    _mesa_sha1_update(&ctx, &rba, sizeof(rba));
 
    const bool afs = device->physical->instance->assume_full_subgroups;
@@ -562,7 +566,14 @@ anv_pipeline_lower_nir(struct anv_pipeline *pipeline,
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
-   NIR_PASS(_, nir, brw_nir_lower_storage_image, compiler->devinfo);
+   NIR_PASS(_, nir, brw_nir_lower_storage_image,
+            &(struct brw_nir_lower_storage_image_opts) {
+               .devinfo = compiler->devinfo,
+               .lower_loads = true,
+               .lower_stores = true,
+               .lower_atomics = true,
+               .lower_get_size = true,
+            });
 
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
             nir_address_format_64bit_global);

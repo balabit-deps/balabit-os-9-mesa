@@ -231,9 +231,9 @@ decompile_register(uint32_t regbase, uint32_t *dwords, uint16_t cnt, int level)
       if (cnt == 0) {
          printlvl(level, "pkt(cs, %u);\n", dword);
       } else {
-         char reg_name[32];
-         char field_name[32];
-         char reg_idx[32];
+         char reg_name[33];
+         char field_name[33];
+         char reg_idx[33];
 
          /* reginfo doesn't return reg name in a compilable format, for now just
           * parse it into a compilable reg name.
@@ -506,12 +506,14 @@ handle_file(const char *filename, uint32_t submit_to_decompile)
       }
       case RD_GPU_ID: {
          dev_id.gpu_id = parse_gpu_id(ps.buf);
-         emit_header();
+         if (fd_dev_info(&dev_id))
+            emit_header();
          break;
       }
       case RD_CHIP_ID: {
-         dev_id.chip_id = *(uint64_t *)ps.buf;
-         emit_header();
+         dev_id.chip_id = parse_chip_id(ps.buf);
+         if (fd_dev_info(&dev_id))
+            emit_header();
          break;
       }
       default:

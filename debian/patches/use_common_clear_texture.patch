@@ -1,0 +1,51 @@
+From 3c1020724eca2488f13148364c1441b6c966c492 Mon Sep 17 00:00:00 2001
+From: Gert Wollny <gert.wollny@collabora.com>
+Date: Fri, 6 Oct 2023 09:31:24 +0200
+Subject: [PATCH] virgl: Use common clear_texture if host doesn't support the
+ feature
+
+v2: Fix include (osy)
+
+Fixes: a1eabeff (gallium: remove PIPE_CAP_CLEAR_TEXTURE)
+Closes: https://gitlab.freedesktop.org/mesa/mesa/-/issues/9944
+
+Signed-off-by: Gert Wollny <gert.wollny@collabora.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/25580>
+---
+ src/gallium/drivers/virgl/virgl_context.c | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/gallium/drivers/virgl/virgl_context.c b/src/gallium/drivers/virgl/virgl_context.c
+index 597d59e209d85..6a4473d2eb7d8 100644
+--- a/src/gallium/drivers/virgl/virgl_context.c
++++ b/src/gallium/drivers/virgl/virgl_context.c
+@@ -36,6 +36,7 @@
+ #include "util/u_inlines.h"
+ #include "util/u_memory.h"
+ #include "util/u_prim.h"
++#include "util/u_surface.h"
+ #include "util/u_transfer.h"
+ #include "util/u_helpers.h"
+ #include "util/slab.h"
+@@ -926,11 +927,15 @@ static void virgl_clear_texture(struct pipe_context *ctx,
+                                 const struct pipe_box *box,
+                                 const void *data)
+ {
+-   struct virgl_context *vctx = virgl_context(ctx);
++   struct virgl_screen *rs = virgl_screen(ctx->screen);
+    struct virgl_resource *vres = virgl_resource(res);
+ 
+-   virgl_encode_clear_texture(vctx, vres, level, box, data);
+-
++   if (rs->caps.caps.v2.capability_bits & VIRGL_CAP_CLEAR_TEXTURE) {
++      struct virgl_context *vctx = virgl_context(ctx);
++      virgl_encode_clear_texture(vctx, vres, level, box, data);
++   } else {
++      u_default_clear_texture(ctx, res, level, box, data);
++   }
+    /* Mark as dirty, since we are updating the host side resource
+     * without going through the corresponding guest side resource, and
+     * hence the two will diverge.
+-- 
+GitLab
+

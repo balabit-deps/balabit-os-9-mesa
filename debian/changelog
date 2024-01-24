@@ -1,11 +1,188 @@
-mesa (23.0.4-0ubuntu1~22.04.1) jammy; urgency=medium
+mesa (23.2.1-1ubuntu3.1~22.04.2) jammy; urgency=medium
 
-  * Backport to 22.04. (LP: #2019212)
+  * patches: Revert a patch that caused GUI fail with OEM-6.1 kernel on
+    Intel DG2. (LP: #2051068)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 24 Jan 2024 14:01:34 +0200
+
+mesa (23.2.1-1ubuntu3.1~22.04.1) jammy; urgency=medium
+
+  * Backport to 22.04. (LP: #2037604)
   * rules: Disable rusticl, FTBFS on jammy.
 
- -- Timo Aaltonen <tjaalton@debian.org>  Mon, 19 Jun 2023 14:41:08 +0300
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 28 Nov 2023 08:53:39 +0300
 
-mesa (23.0.4-0ubuntu1~23.04.1) lunar; urgency=medium
+mesa (23.2.1-1ubuntu3.1) mantic; urgency=medium
+
+  * patches: Avoid crashing virglrenderer when the host doesn't support
+    PIPE_CAP_CLEAR_TEXTURE (LP: #2038834)
+
+ -- Mate Kukri <mate.kukri@canonical.com>  Tue, 07 Nov 2023 15:41:32 +0200
+
+mesa (23.2.1-1ubuntu3) mantic; urgency=medium
+
+  * patches: Fix a function name collision causing crashes. (LP:
+    #2037497)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 06 Oct 2023 11:58:09 +0300
+
+mesa (23.2.1-1ubuntu2) mantic; urgency=medium
+
+  * d/p/v3d-v3dv-support-for-HW-7.1.x.patch
+    - [FFe] Raspberry Pi 5 (LP: #2037642)
+
+ -- Juerg Haefliger <juerg.haefliger@canonical.com>  Fri, 29 Sep 2023 08:27:32 +0200
+
+mesa (23.2.1-1ubuntu1) mantic; urgency=medium
+
+  * Merge from Debian.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 29 Sep 2023 08:46:32 +0300
+
+mesa (23.2.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * control: Bump directx-headers-dev build-dep.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 29 Sep 2023 08:38:02 +0300
+
+mesa (23.2.0~rc4-1ubuntu1) mantic; urgency=medium
+
+  * Merge from Debian. (LP: #2036611)
+  * control, rules: Stay on llvm 15 until bindgen update has landed.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 25 Sep 2023 18:50:55 +0300
+
+mesa (23.2.0~rc4-1) unstable; urgency=medium
+
+  * New upstream release candidate.
+  * egl-wayland-Always-initialise-fd_display_gpu.patch: Dropped,
+    upstream.
+  * fix-clover-build-without-spirv.diff: Fix clover build.
+  * control, rules: Bump llvm to 16. (Closes: #1051680)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 25 Sep 2023 10:01:44 +0300
+
+mesa (23.2.0~rc3-3) unstable; urgency=medium
+
+  * control, rules: Drop mipsel.
+  * rules: Update archs which have rustc (add powerpc, ppc64, riscv64,
+    x32)
+  * egl-wayland-Always-initialise-fd_display_gpu.patch: Re-add the fix
+    for gtk4 autopkgtests.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 20 Sep 2023 15:49:02 +0300
+
+mesa (23.2.0~rc3-2) unstable; urgency=medium
+
+  * Upload to unstable.
+  * rules: Disable panfrost vulkan driver again as upstream doesn't want
+    it shipped yet.
+  * rules: Drop virtio from armel, FTBFS.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 19 Sep 2023 11:46:59 +0300
+
+mesa (23.2.0~rc3-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * rules: Add virtio vulkan driver.
+  * rules: Enable panfrost vulkan driver on armhf/arm64. (Closes: #1009027)
+  * rules: Drop optimization workaround for ppc64el to see if the issues
+    are fixed with current toolchain.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 07 Sep 2023 15:28:51 +0300
+
+mesa (23.1.7-1ubuntu1) mantic; urgency=medium
+
+  * Merge from Debian.
+  * revert-13422.diff: Drop reverts, fix upstream.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 08 Sep 2023 13:41:34 +0300
+
+mesa (23.1.7-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 08 Sep 2023 13:32:25 +0300
+
+mesa (23.1.6-1) unstable; urgency=medium
+
+  * New upstream release.
+  * fix-gtk4-autpkgtest.diff: Dropped, upstream.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 17 Aug 2023 13:24:03 +0300
+
+mesa (23.1.4-1) unstable; urgency=medium
+
+  [ Diederik de Haas ]
+  * Drop transitional libegl1-mesa package (Closes: #1032712)
+  * Drop transitional libgles2-mesa package (Closes: #1032718)
+  * Drop transitional libwayland-egl1-mesa package (Closes: #1032737)
+  * Drop transitional libgl1-mesa-glx package (Closes: #1032738)
+  * d/README.source: Update git repo location to Salsa
+
+  [ Timo Aaltonen ]
+  * New upstream release.
+  * fix-gtk4-autpkgtest.diff: Fix loading swrast driver on wayland.
+    (Closes: #1039922)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Fri, 28 Jul 2023 17:39:12 +0300
+
+mesa (23.1.3-1ubuntu1) mantic; urgency=medium
+
+  * Merge from Debian.
+  * revert-13422.diff: Revert a bunch of commits to fix gtk4
+    autopkgtests. (LP: #2025982)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 05 Jul 2023 18:13:17 +0300
+
+mesa (23.1.3-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 05 Jul 2023 17:23:23 +0300
+
+mesa (23.1.2-1ubuntu1) mantic; urgency=medium
+
+  * Merge from Debian.
+  * patches: Drop upstreamed patches.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 14 Jun 2023 16:45:43 +0300
+
+mesa (23.1.2-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 12 Jun 2023 11:33:47 +0300
+
+mesa (23.1.1-1) experimental; urgency=medium
+
+  * New upstream release.
+  * rules: Set VERSION so that it also includes the packaging
+    revision. (LP: #2020604)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 30 May 2023 11:27:24 +0300
+
+mesa (23.1.0-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 11 May 2023 13:37:15 +0300
+
+mesa (23.1.0~rc3-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Tue, 02 May 2023 14:32:42 +0300
+
+mesa (23.1.0~rc2-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * patches: Refreshed.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 20 Apr 2023 13:29:54 +0300
+
+mesa (23.0.4-0ubuntu1) mantic; urgency=medium
 
   * New upstream release. (LP: #2021948)
     - add a revert for amdgpu which missed 23.0.x branch
@@ -78,6 +255,12 @@ mesa (23.0.0~rc1-1) experimental; urgency=medium
   * rusticl-ftbfs.diff: Fix rusticl dependencies to include valgrind.
 
  -- Timo Aaltonen <tjaalton@debian.org>  Mon, 16 Jan 2023 11:20:46 +0200
+
+mesa (22.3.7-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 13 Mar 2023 09:37:36 +0200
 
 mesa (22.3.6-1ubuntu2) lunar; urgency=medium
 

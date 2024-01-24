@@ -25,9 +25,19 @@
 #define UTIL_MACROS_H
 
 #include <assert.h>
+#if defined(__HAIKU__)  && !defined(__cplusplus)
+#define static_assert _Static_assert
+#endif
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+
+#ifdef _GAMING_XBOX
+#define strdup _strdup
+#define stricmp _stricmp
+#define unlink _unlink
+#define access(a, b) _access(a, b)
+#endif
 
 /* Compute the size of an array */
 #ifndef ARRAY_SIZE
@@ -112,17 +122,17 @@
 #if defined(HAVE___BUILTIN_UNREACHABLE) || __has_builtin(__builtin_unreachable)
 #define unreachable(str)    \
 do {                        \
-   assert(!str);            \
+   assert(!"" str);         \
    __builtin_unreachable(); \
 } while (0)
 #elif defined (_MSC_VER)
 #define unreachable(str)    \
 do {                        \
-   assert(!str);            \
+   assert(!"" str);         \
    __assume(0);             \
 } while (0)
 #else
-#define unreachable(str) assert(!str)
+#define unreachable(str) assert(!"" str)
 #endif
 
 /**
@@ -194,9 +204,15 @@ do {                       \
  * packed, to trade off performance for space.
  */
 #ifdef HAVE_FUNC_ATTRIBUTE_PACKED
-#define PACKED __attribute__((__packed__))
+#  if defined(__MINGW32__) || defined(__MINGW64__)
+#    define PACKED __attribute__((gcc_struct,__packed__))
+#  else
+#    define PACKED __attribute__((__packed__))
+#  endif
+#  define ENUM_PACKED __attribute__((packed))
 #else
 #define PACKED
+#define ENUM_PACKED
 #endif
 
 /* Attribute pure is used for functions that have no effects other than their

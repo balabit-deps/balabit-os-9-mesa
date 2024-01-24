@@ -75,6 +75,7 @@ static const struct debug_named_value etna_debug_options[] = {
    {"linear_pe",      ETNA_DBG_LINEAR_PE, "Enable linear PE"},
    {"msaa",           ETNA_DBG_MSAA, "Enable MSAA support"},
    {"shared_ts",      ETNA_DBG_SHARED_TS, "Enable TS sharing"},
+   {"perf",           ETNA_DBG_PERF, "Enable performance warnings"},
    DEBUG_NAMED_VALUE_END
 };
 
@@ -213,6 +214,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 
    /* Texturing. */
+   case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
+      return VIV_FEATURE(screen, chipMinorFeatures1, HALF_FLOAT);
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
       return 1;
    case PIPE_CAP_MAX_TEXTURE_2D_SIZE:
@@ -241,6 +244,8 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    /* Queries. */
    case PIPE_CAP_OCCLUSION_QUERY:
+   case PIPE_CAP_CONDITIONAL_RENDER:
+   case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
       return VIV_FEATURE(screen, chipMinorFeatures1, HALTI0);
 
    /* Preferences */
@@ -269,21 +274,21 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_SUPPORTED_PRIM_MODES:
    case PIPE_CAP_SUPPORTED_PRIM_MODES_WITH_RESTART: {
       /* Generate the bitmask of supported draw primitives. */
-      uint32_t modes = 1 << PIPE_PRIM_POINTS |
-                       1 << PIPE_PRIM_LINES |
-                       1 << PIPE_PRIM_LINE_STRIP |
-                       1 << PIPE_PRIM_TRIANGLES |
-                       1 << PIPE_PRIM_TRIANGLE_FAN;
+      uint32_t modes = 1 << MESA_PRIM_POINTS |
+                       1 << MESA_PRIM_LINES |
+                       1 << MESA_PRIM_LINE_STRIP |
+                       1 << MESA_PRIM_TRIANGLES |
+                       1 << MESA_PRIM_TRIANGLE_FAN;
 
       /* TODO: The bug relates only to indexed draws, but here we signal
        * that there is no support for triangle strips at all. This should
        * be refined.
        */
       if (VIV_FEATURE(screen, chipMinorFeatures2, BUG_FIXES8))
-         modes |= 1 << PIPE_PRIM_TRIANGLE_STRIP;
+         modes |= 1 << MESA_PRIM_TRIANGLE_STRIP;
 
       if (VIV_FEATURE(screen, chipMinorFeatures2, LINE_LOOP))
-         modes |= 1 << PIPE_PRIM_LINE_LOOP;
+         modes |= 1 << MESA_PRIM_LINE_LOOP;
 
       return modes;
    }
@@ -408,8 +413,6 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
       return shader == PIPE_SHADER_FRAGMENT
                 ? screen->specs.fragment_sampler_count
                 : screen->specs.vertex_sampler_count;
-   case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_NIR;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFER0_SIZE:
       if (ubo_enable)
          return 16384; /* 16384 so state tracker enables UBOs */
@@ -417,8 +420,6 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
                 ? screen->specs.max_ps_uniforms * sizeof(float[4])
                 : screen->specs.max_vs_uniforms * sizeof(float[4]);
    case PIPE_SHADER_CAP_DROUND_SUPPORTED:
-   case PIPE_SHADER_CAP_DFRACEXP_DLDEXP_SUPPORTED:
-   case PIPE_SHADER_CAP_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       return false;
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
@@ -1022,10 +1023,12 @@ etna_get_specs(struct etna_screen *screen)
 
    screen->specs.use_blt = VIV_FEATURE(screen, chipMinorFeatures5, BLT_ENGINE);
 
-   /* Only allow fast clear with MC2.0, as the TS unit bypasses the memory
-    * offset on MC1.0 and we have no way to fixup the address.
+   /* Only allow fast clear with MC2.0 or MMUv2, as the TS unit bypasses the
+    * memory offset for the MMUv1 linear window on MC1.0 and we have no way to
+    * fixup the address.
     */
-   if (!VIV_FEATURE(screen, chipMinorFeatures0, MC20))
+   if (!VIV_FEATURE(screen, chipMinorFeatures0, MC20) &&
+       !VIV_FEATURE(screen, chipMinorFeatures1, MMU_VERSION))
       screen->features[viv_chipFeatures] &= ~chipFeatures_FAST_CLEAR;
 
    return true;
@@ -1074,6 +1077,13 @@ etna_get_disk_shader_cache(struct pipe_screen *pscreen)
    return compiler->disk_cache;
 }
 
+static int
+etna_screen_get_fd(struct pipe_screen *pscreen)
+{
+   struct etna_screen *screen = etna_screen(pscreen);
+   return etna_device_fd(screen->dev);
+}
+
 struct pipe_screen *
 etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
                    struct renderonly *ro)
@@ -1089,7 +1099,6 @@ etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
    screen->dev = dev;
    screen->gpu = gpu;
    screen->ro = ro;
-   screen->refcnt = 1;
 
    screen->drm_version = etnaviv_device_version(screen->dev);
    etna_mesa_debug = debug_get_option_etna_mesa_debug();
@@ -1216,6 +1225,7 @@ etna_screen_create(struct etna_device *dev, struct etna_gpu *gpu,
       screen->features[viv_chipMinorFeatures2] &= ~chipMinorFeatures2_LINEAR_PE;
 
    pscreen->destroy = etna_screen_destroy;
+   pscreen->get_screen_fd = etna_screen_get_fd;
    pscreen->get_param = etna_screen_get_param;
    pscreen->get_paramf = etna_screen_get_paramf;
    pscreen->get_shader_param = etna_screen_get_shader_param;

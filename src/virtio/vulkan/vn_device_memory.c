@@ -29,10 +29,6 @@ vn_device_memory_pool_grow_alloc(struct vn_device *dev,
 {
    VkDevice dev_handle = vn_device_to_handle(dev);
    const VkAllocationCallbacks *alloc = &dev->base.base.alloc;
-   const VkPhysicalDeviceMemoryProperties *mem_props =
-      &dev->physical_device->memory_properties.memoryProperties;
-   const VkMemoryPropertyFlags mem_flags =
-      mem_props->memoryTypes[mem_type_index].propertyFlags;
    struct vn_device_memory *mem = NULL;
    VkDeviceMemory mem_handle = VK_NULL_HANDLE;
    VkResult result;
@@ -44,7 +40,8 @@ vn_device_memory_pool_grow_alloc(struct vn_device *dev,
 
    vn_object_base_init(&mem->base, VK_OBJECT_TYPE_DEVICE_MEMORY, &dev->base);
    mem->size = size;
-   mem->flags = mem_flags;
+   mem->type = dev->physical_device->memory_properties.memoryProperties
+                  .memoryTypes[mem_type_index];
 
    mem_handle = vn_device_memory_to_handle(mem);
    result = vn_call_vkAllocateMemory(
@@ -61,7 +58,8 @@ vn_device_memory_pool_grow_alloc(struct vn_device *dev,
    }
 
    result = vn_renderer_bo_create_from_device_memory(
-      dev->renderer, mem->size, mem->base.id, mem->flags, 0, &mem->base_bo);
+      dev->renderer, mem->size, mem->base.id, mem->type.propertyFlags, 0,
+      &mem->base_bo);
    if (result != VK_SUCCESS) {
       assert(!mem->base_bo);
       goto fail;
@@ -306,7 +304,7 @@ vn_device_memory_alloc_guest_vram(
    VkResult result = VK_SUCCESS;
 
    result = vn_renderer_bo_create_from_device_memory(
-      dev->renderer, mem->size, 0, mem->flags, external_handles,
+      dev->renderer, mem->size, 0, mem->type.propertyFlags, external_handles,
       &mem->base_bo);
    if (result != VK_SUCCESS) {
       return result;
@@ -364,8 +362,8 @@ vn_device_memory_alloc_generic(
       return result;
 
    result = vn_renderer_bo_create_from_device_memory(
-      dev->renderer, mem->size, mem->base.id, mem->flags, external_handles,
-      &mem->base_bo);
+      dev->renderer, mem->size, mem->base.id, mem->type.propertyFlags,
+      external_handles, &mem->base_bo);
    if (result != VK_SUCCESS) {
       vn_async_vkFreeMemory(dev->instance, dev_handle, mem_handle, NULL);
       return result;
@@ -384,6 +382,62 @@ vn_device_memory_alloc_generic(
    return VK_SUCCESS;
 }
 
+struct vn_device_memory_alloc_info {
+   VkMemoryAllocateInfo alloc;
+   VkExportMemoryAllocateInfo export;
+   VkMemoryAllocateFlagsInfo flags;
+   VkMemoryDedicatedAllocateInfo dedicated;
+   VkMemoryOpaqueCaptureAddressAllocateInfo capture;
+};
+
+static const VkMemoryAllocateInfo *
+vn_device_memory_fix_alloc_info(
+   const VkMemoryAllocateInfo *alloc_info,
+   const VkExternalMemoryHandleTypeFlagBits renderer_handle_type,
+   bool has_guest_vram,
+   struct vn_device_memory_alloc_info *local_info)
+{
+   local_info->alloc = *alloc_info;
+   VkBaseOutStructure *cur = (void *)&local_info->alloc;
+
+   vk_foreach_struct_const(src, alloc_info->pNext) {
+      void *next = NULL;
+      switch (src->sType) {
+      case VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO:
+         /* guest vram turns export alloc into import, so drop export info */
+         if (has_guest_vram)
+            break;
+         memcpy(&local_info->export, src, sizeof(local_info->export));
+         local_info->export.handleTypes = renderer_handle_type;
+         next = &local_info->export;
+         break;
+      case VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO:
+         memcpy(&local_info->flags, src, sizeof(local_info->flags));
+         next = &local_info->flags;
+         break;
+      case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO:
+         memcpy(&local_info->dedicated, src, sizeof(local_info->dedicated));
+         next = &local_info->dedicated;
+         break;
+      case VK_STRUCTURE_TYPE_MEMORY_OPAQUE_CAPTURE_ADDRESS_ALLOCATE_INFO:
+         memcpy(&local_info->capture, src, sizeof(local_info->capture));
+         next = &local_info->capture;
+         break;
+      default:
+         break;
+      }
+
+      if (next) {
+         cur->pNext = next;
+         cur = next;
+      }
+   }
+
+   cur->pNext = NULL;
+
+   return &local_info->alloc;
+}
+
 static VkResult
 vn_device_memory_alloc(struct vn_device *dev,
                        struct vn_device_memory *mem,
@@ -393,6 +447,18 @@ vn_device_memory_alloc(struct vn_device *dev,
    const struct vn_instance *instance = dev->physical_device->instance;
    const struct vn_renderer_info *renderer_info = &instance->renderer->info;
 
+   const VkExternalMemoryHandleTypeFlagBits renderer_handle_type =
+      dev->physical_device->external_memory.renderer_handle_type;
+   struct vn_device_memory_alloc_info local_info;
+   if (external_handles && external_handles != renderer_handle_type) {
+      alloc_info = vn_device_memory_fix_alloc_info(
+         alloc_info, renderer_handle_type, renderer_info->has_guest_vram,
+         &local_info);
+
+      /* ensure correct blob flags */
+      external_handles = renderer_handle_type;
+   }
+
    if (renderer_info->has_guest_vram) {
       return vn_device_memory_alloc_guest_vram(dev, mem, alloc_info,
                                                external_handles);
@@ -400,6 +466,31 @@ vn_device_memory_alloc(struct vn_device *dev,
 
    return vn_device_memory_alloc_generic(dev, mem, alloc_info,
                                          external_handles);
+}
+
+static void
+vn_device_memory_emit_report(struct vn_device *dev,
+                             struct vn_device_memory *mem,
+                             bool is_alloc,
+                             VkResult result)
+{
+   if (likely(!dev->memory_reports))
+      return;
+
+   VkDeviceMemoryReportEventTypeEXT type;
+   if (result != VK_SUCCESS) {
+      type = VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_ALLOCATION_FAILED_EXT;
+   } else if (is_alloc) {
+      type = mem->is_import ? VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_IMPORT_EXT
+                            : VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_ALLOCATE_EXT;
+   } else {
+      type = mem->is_import ? VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_UNIMPORT_EXT
+                            : VK_DEVICE_MEMORY_REPORT_EVENT_TYPE_FREE_EXT;
+   }
+   const uint64_t mem_obj_id =
+      mem->is_external ? mem->base_bo->res_id : mem->base.id;
+   vn_device_emit_device_memory_report(dev, type, mem_obj_id, mem->size,
+                                       &mem->base, mem->type.heapIndex);
 }
 
 VkResult
@@ -413,16 +504,10 @@ vn_AllocateMemory(VkDevice device,
    const VkAllocationCallbacks *alloc =
       pAllocator ? pAllocator : &dev->base.base.alloc;
 
-   const VkPhysicalDeviceMemoryProperties *mem_props =
-      &dev->physical_device->memory_properties.memoryProperties;
-   const VkMemoryPropertyFlags mem_flags =
-      mem_props->memoryTypes[pAllocateInfo->memoryTypeIndex].propertyFlags;
-
    const VkExportMemoryAllocateInfo *export_info = NULL;
    const VkImportAndroidHardwareBufferInfoANDROID *import_ahb_info = NULL;
    const VkImportMemoryFdInfoKHR *import_fd_info = NULL;
    bool export_ahb = false;
-
    vk_foreach_struct_const(pnext, pAllocateInfo->pNext) {
       switch (pnext->sType) {
       case VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO:
@@ -452,7 +537,10 @@ vn_AllocateMemory(VkDevice device,
 
    vn_object_base_init(&mem->base, VK_OBJECT_TYPE_DEVICE_MEMORY, &dev->base);
    mem->size = pAllocateInfo->allocationSize;
-   mem->flags = mem_flags;
+   mem->type = dev->physical_device->memory_properties.memoryProperties
+                  .memoryTypes[pAllocateInfo->memoryTypeIndex];
+   mem->is_import = import_ahb_info || import_fd_info;
+   mem->is_external = mem->is_import || export_info;
 
    VkDeviceMemory mem_handle = vn_device_memory_to_handle(mem);
    VkResult result;
@@ -468,12 +556,15 @@ vn_AllocateMemory(VkDevice device,
       result = vn_device_memory_alloc(dev, mem, pAllocateInfo,
                                       export_info->handleTypes);
    } else if (vn_device_memory_should_suballocate(dev, pAllocateInfo,
-                                                  mem_flags)) {
+                                                  mem->type.propertyFlags)) {
       result = vn_device_memory_pool_suballocate(
          dev, mem, pAllocateInfo->memoryTypeIndex);
    } else {
       result = vn_device_memory_alloc(dev, mem, pAllocateInfo, 0);
    }
+
+   vn_device_memory_emit_report(dev, mem, /* is_alloc */ true, result);
+
    if (result != VK_SUCCESS) {
       vn_object_base_fini(&mem->base);
       vk_free(alloc, mem);
@@ -498,6 +589,8 @@ vn_FreeMemory(VkDevice device,
 
    if (!mem)
       return;
+
+   vn_device_memory_emit_report(dev, mem, /* is_alloc */ false, VK_SUCCESS);
 
    if (mem->base_memory) {
       vn_device_memory_pool_unref(dev, mem->base_memory);
@@ -546,17 +639,23 @@ vn_MapMemory(VkDevice device,
    void *ptr = NULL;
    VkResult result;
 
-   assert(mem->flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+   assert(mem->type.propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 
    /* We don't want to blindly create a bo for each HOST_VISIBLE memory as
     * that has a cost. By deferring bo creation until now, we can avoid the
     * cost unless a bo is really needed. However, that means
     * vn_renderer_bo_map will block until the renderer creates the resource
     * and injects the pages into the guest.
+    *
+    * XXX We also assume that a vn_renderer_bo can be created as long as the
+    * renderer VkDeviceMemory has a mappable memory type.  That is plain
+    * wrong.  It is impossible to fix though until some new extension is
+    * created and supported by the driver, and that the renderer switches to
+    * the extension.
     */
    if (need_bo) {
       result = vn_renderer_bo_create_from_device_memory(
-         dev->renderer, mem->size, mem->base.id, mem->flags, 0,
+         dev->renderer, mem->size, mem->base.id, mem->type.propertyFlags, 0,
          &mem->base_bo);
       if (result != VK_SUCCESS)
          return vn_error(dev->instance, result);
@@ -679,29 +778,22 @@ vn_get_memory_dma_buf_properties(struct vn_device *dev,
                                  uint32_t *out_mem_type_bits)
 {
    VkDevice device = vn_device_to_handle(dev);
-   struct vn_renderer_bo *bo = NULL;
-   VkResult result = VK_SUCCESS;
 
-   result = vn_renderer_bo_create_from_dma_buf(dev->renderer, 0 /* size */,
-                                               fd, 0 /* flags */, &bo);
+   struct vn_renderer_bo *bo;
+   VkResult result = vn_renderer_bo_create_from_dma_buf(
+      dev->renderer, 0 /* size */, fd, 0 /* flags */, &bo);
    if (result != VK_SUCCESS)
       return result;
 
    vn_instance_roundtrip(dev->instance);
 
-   VkMemoryResourceAllocationSizeProperties100000MESA alloc_size_props = {
+   VkMemoryResourceAllocationSizePropertiesMESA alloc_size_props = {
       .sType =
-         VK_STRUCTURE_TYPE_MEMORY_RESOURCE_ALLOCATION_SIZE_PROPERTIES_100000_MESA,
-      .pNext = NULL,
-      .allocationSize = 0,
+         VK_STRUCTURE_TYPE_MEMORY_RESOURCE_ALLOCATION_SIZE_PROPERTIES_MESA,
    };
    VkMemoryResourcePropertiesMESA props = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_RESOURCE_PROPERTIES_MESA,
-      .pNext =
-         dev->instance->experimental.memoryResourceAllocationSize == VK_TRUE
-            ? &alloc_size_props
-            : NULL,
-      .memoryTypeBits = 0,
+      .pNext = &alloc_size_props,
    };
    result = vn_call_vkGetMemoryResourcePropertiesMESA(dev->instance, device,
                                                       bo->res_id, &props);

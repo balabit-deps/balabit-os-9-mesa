@@ -214,6 +214,7 @@ public:
    EMIT1(FBH)
    EMIT1(FBL)
    EMIT1(CBIT)
+   EMIT1(LZD)
    EMIT3(MAD)
    EMIT2(ADDC)
    EMIT2(SUBB)
@@ -275,12 +276,13 @@ public:
 
    void resolve_ud_negate(src_reg *reg);
 
+   void emit_shader_float_controls_execution_mode();
+
    bool lower_minmax();
 
    src_reg get_timestamp();
 
-   void dump_instruction(const backend_instruction *inst) const;
-   void dump_instruction(const backend_instruction *inst, FILE *file) const;
+   virtual void dump_instruction_to_file(const backend_instruction *inst, FILE *file) const;
 
    bool optimize_predicate(nir_alu_instr *instr, enum brw_predicate *predicate);
 

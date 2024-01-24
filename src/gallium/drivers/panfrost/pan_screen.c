@@ -58,15 +58,13 @@
 static const struct debug_named_value panfrost_debug_options[] = {
    {"perf",       PAN_DBG_PERF,     "Enable performance warnings"},
    {"trace",      PAN_DBG_TRACE,    "Trace the command stream"},
-   {"deqp",       PAN_DBG_DEQP,     "Hacks for dEQP"},
    {"dirty",      PAN_DBG_DIRTY,    "Always re-emit all state"},
    {"sync",       PAN_DBG_SYNC,     "Wait for each job's completion and abort on GPU faults"},
    {"nofp16",     PAN_DBG_NOFP16,    "Disable 16-bit support"},
    {"gl3",        PAN_DBG_GL3,      "Enable experimental GL 3.x implementation, up to 3.3"},
    {"noafbc",     PAN_DBG_NO_AFBC,  "Disable AFBC support"},
-   {"nocrc",      PAN_DBG_NO_CRC,   "Disable transaction elimination"},
+   {"crc",        PAN_DBG_CRC,      "Enable transaction elimination"},
    {"msaa16",     PAN_DBG_MSAA16,   "Enable MSAA 8x and 16x support"},
-   {"indirect",   PAN_DBG_INDIRECT, "Use experimental compute kernel for indirect draws"},
    {"linear",     PAN_DBG_LINEAR,   "Force linear textures"},
    {"nocache",    PAN_DBG_NO_CACHE, "Disable BO cache"},
    {"dump",       PAN_DBG_DUMP,     "Dump all graphics memory"},
@@ -101,7 +99,7 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
    struct panfrost_device *dev = pan_device(screen);
 
    /* Our GL 3.x implementation is WIP */
-   bool is_gl3 = dev->debug & (PAN_DBG_GL3 | PAN_DBG_DEQP);
+   bool is_gl3 = dev->debug & PAN_DBG_GL3;
 
    /* Native MRT is introduced with v5 */
    bool has_mrt = (dev->arch >= 5);
@@ -156,6 +154,7 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
 
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
    case PIPE_CAP_CLIP_HALFZ:
+   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
    case PIPE_CAP_TEXTURE_SWIZZLE:
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP_TO_EDGE:
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
@@ -169,7 +168,6 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
    case PIPE_CAP_SHADER_ARRAY_COMPONENTS:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
-   case PIPE_CAP_TEXTURE_BUFFER_SAMPLER:
    case PIPE_CAP_PACKED_UNIFORMS:
    case PIPE_CAP_IMAGE_LOAD_FORMATTED:
    case PIPE_CAP_CUBE_MAP_ARRAY:
@@ -342,11 +340,11 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_SUPPORTED_PRIM_MODES_WITH_RESTART: {
       /* Mali supports GLES and QUADS. Midgard and v6 Bifrost
        * support more */
-      uint32_t modes = BITFIELD_MASK(PIPE_PRIM_QUADS + 1);
+      uint32_t modes = BITFIELD_MASK(MESA_PRIM_QUADS + 1);
 
       if (dev->arch <= 6) {
-         modes |= BITFIELD_BIT(PIPE_PRIM_QUAD_STRIP);
-         modes |= BITFIELD_BIT(PIPE_PRIM_POLYGON);
+         modes |= BITFIELD_BIT(MESA_PRIM_QUAD_STRIP);
+         modes |= BITFIELD_BIT(MESA_PRIM_POLYGON);
       }
 
       if (dev->arch >= 9) {
@@ -354,7 +352,7 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
           * don't seem to work correctly. Disable to fix
           * arb-provoking-vertex-render.
           */
-         modes &= ~BITFIELD_BIT(PIPE_PRIM_QUADS);
+         modes &= ~BITFIELD_BIT(MESA_PRIM_QUADS);
       }
 
       return modes;
@@ -378,7 +376,6 @@ panfrost_get_shader_param(struct pipe_screen *screen,
 {
    struct panfrost_device *dev = pan_device(screen);
    bool is_nofp16 = dev->debug & PAN_DBG_NOFP16;
-   bool is_deqp = dev->debug & PAN_DBG_DEQP;
 
    switch (shader) {
    case PIPE_SHADER_VERTEX:
@@ -456,14 +453,11 @@ panfrost_get_shader_param(struct pipe_screen *screen,
    case PIPE_SHADER_CAP_FP16_CONST_BUFFERS:
       return dev->arch >= 6 && !is_nofp16;
    case PIPE_SHADER_CAP_INT16:
-      /* XXX: Advertise this CAP when a proper fix to lower_precision
-       * lands. GLSL IR validation failure in glmark2 -bterrain */
-      return dev->arch >= 6 && !is_nofp16 && is_deqp;
+      /* Blocked on https://gitlab.freedesktop.org/mesa/mesa/-/issues/6075 */
+      return false;
 
    case PIPE_SHADER_CAP_INT64_ATOMICS:
    case PIPE_SHADER_CAP_DROUND_SUPPORTED:
-   case PIPE_SHADER_CAP_DFRACEXP_DLDEXP_SUPPORTED:
-   case PIPE_SHADER_CAP_LDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       return 0;
 
@@ -474,9 +468,6 @@ panfrost_get_shader_param(struct pipe_screen *screen,
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
       STATIC_ASSERT(PIPE_MAX_SHADER_SAMPLER_VIEWS < 0x10000);
       return PIPE_MAX_SHADER_SAMPLER_VIEWS;
-
-   case PIPE_SHADER_CAP_PREFERRED_IR:
-      return PIPE_SHADER_IR_NIR;
 
    case PIPE_SHADER_CAP_SUPPORTED_IRS:
       return (1 << PIPE_SHADER_IR_NIR);
@@ -535,6 +526,18 @@ panfrost_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
    }
 }
 
+static uint32_t
+pipe_to_pan_bind_flags(uint32_t pipe_bind_flags)
+{
+   static_assert(PIPE_BIND_DEPTH_STENCIL == PAN_BIND_DEPTH_STENCIL, "");
+   static_assert(PIPE_BIND_RENDER_TARGET == PAN_BIND_RENDER_TARGET, "");
+   static_assert(PIPE_BIND_SAMPLER_VIEW == PAN_BIND_SAMPLER_VIEW, "");
+   static_assert(PIPE_BIND_VERTEX_BUFFER == PAN_BIND_VERTEX_BUFFER, "");
+
+   return pipe_bind_flags & (PAN_BIND_DEPTH_STENCIL | PAN_BIND_RENDER_TARGET |
+                             PAN_BIND_VERTEX_BUFFER | PAN_BIND_SAMPLER_VIEW);
+}
+
 /**
  * Query format support for creating a texture, drawing surface, etc.
  * \param format  the format to test
@@ -582,9 +585,7 @@ panfrost_is_format_supported(struct pipe_screen *screen,
 
    /* Check we support the format with the given bind */
 
-   unsigned relevant_bind =
-      bind & (PIPE_BIND_DEPTH_STENCIL | PIPE_BIND_RENDER_TARGET |
-              PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_SAMPLER_VIEW);
+   unsigned pan_bind_flags = pipe_to_pan_bind_flags(bind);
 
    struct panfrost_format fmt = dev->formats[format];
 
@@ -598,7 +599,7 @@ panfrost_is_format_supported(struct pipe_screen *screen,
    if (!supported)
       return false;
 
-   return MALI_EXTRACT_INDEX(fmt.hw) && ((relevant_bind & ~fmt.bind) == 0);
+   return MALI_EXTRACT_INDEX(fmt.hw) && ((pan_bind_flags & ~fmt.bind) == 0);
 }
 
 /* We always support linear and tiled operations, both external and internal.
@@ -750,8 +751,11 @@ panfrost_get_compute_param(struct pipe_screen *pscreen,
    case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
       RET((uint32_t[]){1});
 
-   case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
+   case PIPE_COMPUTE_CAP_SUBGROUP_SIZES:
       RET((uint32_t[]){pan_subgroup_size(dev->arch)});
+
+   case PIPE_COMPUTE_CAP_MAX_SUBGROUPS:
+      RET((uint32_t[]){0 /* TODO */});
 
    case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
       RET((uint64_t[]){1024}); // TODO
@@ -796,6 +800,12 @@ panfrost_get_disk_shader_cache(struct pipe_screen *pscreen)
    return pan_screen(pscreen)->disk_cache;
 }
 
+static int
+panfrost_get_screen_fd(struct pipe_screen *pscreen)
+{
+   return pan_device(pscreen)->fd;
+}
+
 int
 panfrost_get_driver_query_info(struct pipe_screen *pscreen, unsigned index,
                                struct pipe_driver_query_info *info)
@@ -814,7 +824,8 @@ panfrost_get_driver_query_info(struct pipe_screen *pscreen, unsigned index,
 }
 
 struct pipe_screen *
-panfrost_create_screen(int fd, struct renderonly *ro)
+panfrost_create_screen(int fd, const struct pipe_screen_config *config,
+                       struct renderonly *ro)
 {
    /* Create the screen */
    struct panfrost_screen *screen = rzalloc(NULL, struct panfrost_screen);
@@ -843,6 +854,7 @@ panfrost_create_screen(int fd, struct renderonly *ro)
 
    screen->base.destroy = panfrost_destroy_screen;
 
+   screen->base.get_screen_fd = panfrost_get_screen_fd;
    screen->base.get_name = panfrost_get_name;
    screen->base.get_vendor = panfrost_get_vendor;
    screen->base.get_device_vendor = panfrost_get_device_vendor;

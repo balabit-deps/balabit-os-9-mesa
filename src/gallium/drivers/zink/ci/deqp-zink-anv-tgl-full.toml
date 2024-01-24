@@ -97,7 +97,7 @@ deqp_args = [
 prefix = "multisample-"
 
 [[deqp]]
-deqp = "/deqp/modules/egl/deqp-egl"
+deqp = "/deqp/modules/egl/deqp-egl-x11"
 caselists = ["/deqp/mustpass/egl-master.txt"]
 deqp_args = [
     "--deqp-surface-width=256", "--deqp-surface-height=256",
@@ -120,8 +120,3 @@ piglit_folder = "/piglit"
 profile = "gpu"
 process_isolation = true
 timeout = 180.0
-# We use gbm because X can die:
-# MESA: error: ZINK: vkQueueSubmit failed (VK_ERROR_DEVICE_LOST)
-# Xorg: ../src/gallium/drivers/zink/zink_batch.c:599: zink_end_batch: Assertion `!ctx->batch_states' failed.
-  [piglit.env]
-  PIGLIT_PLATFORM = "gbm"

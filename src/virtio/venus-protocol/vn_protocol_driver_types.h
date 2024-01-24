@@ -1030,6 +1030,24 @@ vn_decode_VkShaderStageFlagBits(struct vn_cs_decoder *dec, VkShaderStageFlagBits
     vn_decode_int32_t(dec, (int32_t *)val);
 }
 
+static inline size_t
+vn_sizeof_VkShaderStageFlagBits_array(const VkShaderStageFlagBits *val, uint32_t count)
+{
+    return vn_sizeof_int32_t_array((const int32_t *)val, count);
+}
+
+static inline void
+vn_encode_VkShaderStageFlagBits_array(struct vn_cs_encoder *enc, const VkShaderStageFlagBits *val, uint32_t count)
+{
+    vn_encode_int32_t_array(enc, (const int32_t *)val, count);
+}
+
+static inline void
+vn_decode_VkShaderStageFlagBits_array(struct vn_cs_decoder *dec, VkShaderStageFlagBits *val, uint32_t count)
+{
+    vn_decode_int32_t_array(dec, (int32_t *)val, count);
+}
+
 /* enum VkImageUsageFlagBits */
 
 static inline size_t
@@ -2881,6 +2899,24 @@ vn_decode_VkObjectType(struct vn_cs_decoder *dec, VkObjectType *val)
     vn_decode_int32_t(dec, (int32_t *)val);
 }
 
+static inline size_t
+vn_sizeof_VkObjectType_array(const VkObjectType *val, uint32_t count)
+{
+    return vn_sizeof_int32_t_array((const int32_t *)val, count);
+}
+
+static inline void
+vn_encode_VkObjectType_array(struct vn_cs_encoder *enc, const VkObjectType *val, uint32_t count)
+{
+    vn_encode_int32_t_array(enc, (const int32_t *)val, count);
+}
+
+static inline void
+vn_decode_VkObjectType_array(struct vn_cs_decoder *dec, VkObjectType *val, uint32_t count)
+{
+    vn_decode_int32_t_array(dec, (int32_t *)val, count);
+}
+
 /* enum VkDescriptorUpdateTemplateType */
 
 static inline size_t
@@ -3252,6 +3288,27 @@ vn_encode_VkCommandTypeEXT(struct vn_cs_encoder *enc, const VkCommandTypeEXT *va
 
 static inline void
 vn_decode_VkCommandTypeEXT(struct vn_cs_decoder *dec, VkCommandTypeEXT *val)
+{
+    vn_decode_int32_t(dec, (int32_t *)val);
+}
+
+/* enum VkRingStatusFlagBitsMESA */
+
+static inline size_t
+vn_sizeof_VkRingStatusFlagBitsMESA(const VkRingStatusFlagBitsMESA *val)
+{
+    assert(sizeof(*val) == sizeof(int32_t));
+    return vn_sizeof_int32_t((const int32_t *)val);
+}
+
+static inline void
+vn_encode_VkRingStatusFlagBitsMESA(struct vn_cs_encoder *enc, const VkRingStatusFlagBitsMESA *val)
+{
+    vn_encode_int32_t(enc, (const int32_t *)val);
+}
+
+static inline void
+vn_decode_VkRingStatusFlagBitsMESA(struct vn_cs_decoder *dec, VkRingStatusFlagBitsMESA *val)
 {
     vn_decode_int32_t(dec, (int32_t *)val);
 }

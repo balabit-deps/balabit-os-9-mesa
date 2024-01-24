@@ -38,7 +38,7 @@
 #define P_SCREEN_H
 
 
-#include "pipe/p_compiler.h"
+#include "util/compiler.h"
 #include "util/format/u_formats.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_video_enums.h"
@@ -86,6 +86,16 @@ typedef void (*pipe_driver_thread_func)(void *job, void *gdata, int thread_index
  * context.
  */
 struct pipe_screen {
+   int refcnt;
+   void *winsys_priv;
+
+   /**
+    * Get the fd associated with the screen
+    * The fd returned is considered read-only, and in particular will not
+    * be close()d. It must remain valid for as long as the screen exists.
+    */
+   int (*get_screen_fd)(struct pipe_screen *);
+
    /**
     * Atomically incremented by drivers to track the number of contexts.
     * If it's 0, it can be assumed that contexts are not tracked.
@@ -398,7 +408,7 @@ struct pipe_screen {
     *
     * In all other cases, the ctx parameter has no effect.
     *
-    * \param timeout  in nanoseconds (may be PIPE_TIMEOUT_INFINITE).
+    * \param timeout  in nanoseconds (may be OS_TIMEOUT_INFINITE).
     */
    bool (*fence_finish)(struct pipe_screen *screen,
                         struct pipe_context *ctx,

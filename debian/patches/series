@@ -1,9 +1,8 @@
 07_gallium-fix-build-failure-on-powerpcspe.diff
 path_max.diff
 src_glx_dri_common.h.diff
-
-0001-freedreno-Specify-GMEM-tile-alignment-per-GPU.patch
-0002-freedreno-tu-Big-GMEM-support.patch
-0003-freedreno-tu-Add-a690-support.patch
-
-0001-Revert-gallium-u_threaded-buffer-sharedness-tracking.patch
+fix-clover-build-without-spirv.diff
+v3d-v3dv-support-for-HW-7.1.x.patch
+radeonsi-prefix-function-with-si_-to-prevent-name-co.patch
+use_common_clear_texture.patch
+Revert-intel-reduce-minimum-memory-alignment-on-Gfx1.patch

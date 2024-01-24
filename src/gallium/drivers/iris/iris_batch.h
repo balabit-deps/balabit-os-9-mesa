@@ -31,7 +31,6 @@
 #include "util/u_dynarray.h"
 #include "util/perf/u_trace.h"
 
-#include "drm-uapi/i915_drm.h"
 #include "common/intel_decoder.h"
 #include "ds/intel_driver_ds.h"
 #include "ds/intel_tracepoints.h"
@@ -60,6 +59,17 @@ enum iris_batch_name {
    IRIS_BATCH_BLITTER,
 };
 
+/* Same definition as drm_i915_gem_exec_fence so drm_i915_gem_execbuffer2
+ * can directly use exec_fences without extra memory allocation
+ */
+struct iris_batch_fence {
+   uint32_t handle;
+
+#define IRIS_BATCH_FENCE_WAIT (1 << 0)
+#define IRIS_BATCH_FENCE_SIGNAL (1 << 1)
+   uint32_t flags;
+};
+
 struct iris_batch {
    struct iris_context *ice;
    struct iris_screen *screen;
@@ -83,8 +93,15 @@ struct iris_batch {
    /** Last binder address set in this hardware context. */
    uint64_t last_binder_address;
 
-   uint32_t ctx_id;
-   uint32_t exec_flags;
+   union {
+      struct {
+         uint32_t ctx_id;
+         uint32_t exec_flags;
+      } i915;
+      struct {
+         uint32_t engine_id;
+      } xe;
+   };
 
    /** A list of all BOs referenced by this batch */
    struct iris_bo **exec_bos;
@@ -112,7 +129,7 @@ struct iris_batch {
     */
    struct util_dynarray syncobjs;
 
-   /** A list of drm_i915_exec_fences to have execbuf signal or wait on */
+   /** A list of iris_batch_fences to have execbuf signal or wait on */
    struct util_dynarray exec_fences;
 
    /** The amount of aperture space (in bytes) used by all exec_bos */
@@ -197,10 +214,12 @@ struct iris_batch {
    struct intel_ds_queue ds;
 };
 
-void iris_init_batches(struct iris_context *ice, int priority);
+void iris_init_batches(struct iris_context *ice);
 void iris_chain_to_new_batch(struct iris_batch *batch);
 void iris_destroy_batches(struct iris_context *ice);
 void iris_batch_maybe_flush(struct iris_batch *batch, unsigned estimate);
+
+void iris_batch_maybe_begin_frame(struct iris_batch *batch);
 
 void _iris_batch_flush(struct iris_batch *batch, const char *file, int line);
 #define iris_batch_flush(batch) _iris_batch_flush((batch), __FILE__, __LINE__)
@@ -209,12 +228,12 @@ bool iris_batch_references(struct iris_batch *batch, struct iris_bo *bo);
 
 bool iris_batch_prepare_noop(struct iris_batch *batch, bool noop_enable);
 
-#define RELOC_WRITE EXEC_OBJECT_WRITE
-
 void iris_use_pinned_bo(struct iris_batch *batch, struct iris_bo *bo,
                         bool writable, enum iris_domain access);
 
 enum pipe_reset_status iris_batch_check_for_reset(struct iris_batch *batch);
+
+bool iris_batch_syncobj_to_sync_file_fd(struct iris_batch *batch, int *out_fd);
 
 static inline unsigned
 iris_batch_bytes_used(struct iris_batch *batch)
@@ -250,6 +269,7 @@ iris_get_command_space(struct iris_batch *batch, unsigned bytes)
 {
    if (!batch->begin_trace_recorded) {
       batch->begin_trace_recorded = true;
+      iris_batch_maybe_begin_frame(batch);
       trace_intel_begin_batch(&batch->trace);
    }
    iris_require_command_space(batch, bytes);
@@ -428,5 +448,12 @@ iris_batch_name_to_string(enum iris_batch_name name);
    for (struct iris_batch *batch = &ice->batches[0];  \
         batch <= &ice->batches[((struct iris_screen *)ice->ctx.screen)->devinfo->ver >= 12 ? IRIS_BATCH_BLITTER : IRIS_BATCH_COMPUTE]; \
         ++batch)
+
+void iris_batch_update_syncobjs(struct iris_batch *batch);
+unsigned iris_batch_num_fences(struct iris_batch *batch);
+
+void iris_dump_fence_list(struct iris_batch *batch);
+void iris_dump_bo_list(struct iris_batch *batch);
+void iris_batch_decode_batch(struct iris_batch *batch);
 
 #endif
