@@ -25,13 +25,14 @@ libspirv_to_dxil = both_libraries(
     files(
       'dxil_spirv_nir.c',
       'dxil_spirv_nir.h',
+      'dxil_spirv_nir_lower_bindless.c',
       'spirv_to_dxil.c',
       'spirv_to_dxil.h',
     ),
     sha1_h,
   ],
   vs_module_defs : 'spirv_to_dxil.def',
-  dependencies : [idep_nir, idep_libdxil_compiler],
+  dependencies : [idep_nir, idep_vtn, idep_libdxil_compiler],
   include_directories : [inc_include, inc_src, inc_compiler, inc_gallium],
   install : true,
 )

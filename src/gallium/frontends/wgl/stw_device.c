@@ -40,6 +40,7 @@
 #include "stw_device.h"
 #include "stw_winsys.h"
 #include "stw_pixelformat.h"
+#include "stw_gdishim.h"
 #include "gldrv.h"
 #include "stw_tls.h"
 #include "stw_framebuffer.h"
@@ -72,6 +73,7 @@ stw_get_param(struct pipe_frontend_screen *fscreen,
 static int
 get_refresh_rate(void)
 {
+#ifndef _GAMING_XBOX
    DEVMODE devModes;
 
    if (EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS, &devModes)) {
@@ -82,6 +84,9 @@ get_refresh_rate(void)
       /* reasonable default */
       return 60;
    }
+#else
+   return 60;
+#endif /* _GAMING_XBOX */
 }
 
 static bool
@@ -124,7 +129,7 @@ stw_get_config_xml(void)
    return driGetOptionsXml(gallium_driconf, ARRAY_SIZE(gallium_driconf));
 }
 
-boolean
+bool
 stw_init(const struct stw_winsys *stw_winsys)
 {
    static struct stw_device stw_dev_storage;
@@ -165,16 +170,16 @@ stw_init(const struct stw_winsys *stw_winsys)
 
    stw_dev->initialized = true;
 
-   return TRUE;
+   return true;
 
 error1:
    FREE(stw_dev->fscreen);
 
    stw_dev = NULL;
-   return FALSE;
+   return false;
 }
 
-boolean
+bool
 stw_init_screen(HDC hdc)
 {
    EnterCriticalSection(&stw_dev->screen_mutex);
@@ -199,7 +204,7 @@ stw_get_device(void)
    return stw_dev;
 }
 
-boolean
+bool
 stw_init_thread(void)
 {
    return stw_tls_init_thread();
@@ -290,5 +295,5 @@ DrvValidateVersion(ULONG ulVersion)
     * ignore it.
     */
    (void)ulVersion;
-   return TRUE;
+   return true;
 }

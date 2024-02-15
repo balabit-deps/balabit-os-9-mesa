@@ -19,10 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
- *
  */
 
 #include "nir.h"
@@ -117,6 +113,7 @@ get_loop_instr_count(struct exec_list *cf_list)
       }
       case nir_cf_node_loop: {
          nir_loop *loop = nir_cf_node_as_loop(node);
+         assert(!nir_loop_has_continue_construct(loop));
          loop_instr_count += get_loop_instr_count(&loop->body);
          break;
       }
@@ -154,6 +151,7 @@ gcm_build_block_info(struct exec_list *cf_list, struct gcm_state *state,
       }
       case nir_cf_node_loop: {
          nir_loop *loop = nir_cf_node_as_loop(node);
+         assert(!nir_loop_has_continue_construct(loop));
          gcm_build_block_info(&loop->body, state, loop, loop_depth + 1, if_depth,
                               get_loop_instr_count(&loop->body));
          break;
@@ -503,6 +501,7 @@ set_block_for_loop_instr(struct gcm_state *state, nir_instr *instr,
    if (loop == NULL)
       return true;
 
+   assert(!nir_loop_has_continue_construct(loop));
    if (nir_block_dominates(instr->block, block))
       return true;
 
@@ -532,7 +531,9 @@ set_block_for_loop_instr(struct gcm_state *state, nir_instr *instr,
       return true;
 
    if (instr->type == nir_instr_type_load_const ||
-       instr->type == nir_instr_type_tex)
+       instr->type == nir_instr_type_tex ||
+       (instr->type == nir_instr_type_intrinsic &&
+        nir_instr_as_intrinsic(instr)->intrinsic == nir_intrinsic_resource_intel))
       return true;
 
    return false;
@@ -543,6 +544,10 @@ set_block_to_if_block(struct gcm_state *state,  nir_instr *instr,
                       nir_block *block)
 {
    if (instr->type == nir_instr_type_load_const)
+      return true;
+
+   if (instr->type == nir_instr_type_intrinsic &&
+       nir_instr_as_intrinsic(instr)->intrinsic == nir_intrinsic_resource_intel)
       return true;
 
    /* TODO: Figure out some more heuristics to allow more to be moved into
@@ -879,9 +884,8 @@ nir_opt_gcm(nir_shader *shader, bool value_number)
 {
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl)
-         progress |= opt_gcm_impl(shader, function->impl, value_number);
+   nir_foreach_function_impl(impl, shader) {
+      progress |= opt_gcm_impl(shader, impl, value_number);
    }
 
    return progress;

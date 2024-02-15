@@ -30,7 +30,7 @@ hash_instr(const void *data)
    const agx_instr *I = data;
    uint32_t hash = 0;
 
-   /* Explcitly skip destinations, except for size and type */
+   /* Explicitly skip destinations, except for size and type */
    agx_foreach_dest(I, d) {
       hash = HASH(hash, ((uint32_t)I->dest[d].type) |
                            (((uint32_t)I->dest[d].size) << 16));
@@ -73,8 +73,6 @@ instrs_equal(const void *_i1, const void *_i2)
    }
 
    if (i1->imm != i2->imm)
-      return false;
-   if (i1->perspective != i2->perspective)
       return false;
    if (i1->invert_cond != i2->invert_cond)
       return false;

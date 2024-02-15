@@ -94,7 +94,7 @@ _mesa_update_allow_draw_out_of_order(struct gl_context *ctx)
    if (!ctx->Const.AllowDrawOutOfOrder)
       return;
 
-   assert(ctx->API == API_OPENGL_COMPAT);
+   assert(_mesa_is_desktop_gl_compat(ctx));
 
    /* If all of these are NULL, GLSL is disabled. */
    struct gl_program *vs =
@@ -256,12 +256,10 @@ update_program(struct gl_context *ctx)
                               NULL);
    } else {
       /* Use fragment program generated from fixed-function state */
-      struct gl_shader_program *f = _mesa_get_fixed_func_fragment_program(ctx);
-
       _mesa_reference_program(ctx, &ctx->FragmentProgram._Current,
-			      f->_LinkedShaders[MESA_SHADER_FRAGMENT]->Program);
+                              _mesa_get_fixed_func_fragment_program(ctx));
       _mesa_reference_program(ctx, &ctx->FragmentProgram._TexEnvProgram,
-			      f->_LinkedShaders[MESA_SHADER_FRAGMENT]->Program);
+                              ctx->FragmentProgram._Current);
    }
 
    /* Examine vertex program after fragment program as
@@ -440,7 +438,7 @@ update_program_constants(struct gl_context *ctx)
       update_single_program_constants(ctx, ctx->FragmentProgram._Current,
                                       MESA_SHADER_FRAGMENT);
 
-   if (ctx->API == API_OPENGL_COMPAT &&
+   if (_mesa_is_desktop_gl_compat(ctx) &&
        ctx->Const.GLSLVersionCompat >= 150) {
       new_state |=
          update_single_program_constants(ctx, ctx->GeometryProgram._Current,
@@ -510,8 +508,8 @@ _mesa_update_state_locked( struct gl_context *ctx )
       _mesa_update_framebuffer(ctx, ctx->ReadBuffer, ctx->DrawBuffer);
 
    /* Handle Core and Compatibility contexts separately. */
-   if (ctx->API == API_OPENGL_COMPAT ||
-       ctx->API == API_OPENGLES) {
+   if (_mesa_is_desktop_gl_compat(ctx) ||
+       _mesa_is_gles1(ctx)) {
       /* Update derived state. */
       if (new_state & (_NEW_MODELVIEW|_NEW_PROJECTION))
          _mesa_update_modelview_project( ctx, new_state );
@@ -680,7 +678,7 @@ set_vertex_processing_mode(struct gl_context *ctx, gl_vertex_processing_mode m)
        * ES 2.0+ or OpenGL core profile, none of these arrays should ever
        * be enabled.
        */
-      if (ctx->API == API_OPENGL_COMPAT)
+      if (_mesa_is_desktop_gl_compat(ctx))
          ctx->VertexProgram._VPModeInputFilter = VERT_BIT_ALL;
       else
          ctx->VertexProgram._VPModeInputFilter = VERT_BIT_GENERIC_ALL;
@@ -689,9 +687,6 @@ set_vertex_processing_mode(struct gl_context *ctx, gl_vertex_processing_mode m)
    default:
       assert(0);
    }
-
-   _mesa_set_varying_vp_inputs(ctx, ctx->VertexProgram._VPModeInputFilter &
-                               ctx->Array._DrawVAO->_EnabledWithMapMode);
 }
 
 

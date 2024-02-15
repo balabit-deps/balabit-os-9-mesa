@@ -65,7 +65,7 @@ wsi_device_init(struct wsi_device *wsi,
                 const VkAllocationCallbacks *alloc,
                 int display_fd,
                 const struct driOptionCache *dri_options,
-                bool sw_device)
+                const struct wsi_device_options *device_options)
 {
    const char *present_mode;
    UNUSED VkResult result;
@@ -79,8 +79,9 @@ wsi_device_init(struct wsi_device *wsi,
    wsi->instance_alloc = *alloc;
    wsi->pdevice = pdevice;
    wsi->supports_scanout = true;
-   wsi->sw = sw_device || (WSI_DEBUG & WSI_DEBUG_SW);
+   wsi->sw = device_options->sw_device || (WSI_DEBUG & WSI_DEBUG_SW);
    wsi->wants_linear = (WSI_DEBUG & WSI_DEBUG_LINEAR) != 0;
+   wsi->x11.extra_xwayland_image = device_options->extra_xwayland_image;
 #define WSI_GET_CB(func) \
    PFN_vk##func func = (PFN_vk##func)proc_addr(pdevice, "vk" #func)
    WSI_GET_CB(GetPhysicalDeviceExternalSemaphoreProperties);
@@ -206,6 +207,12 @@ wsi_device_init(struct wsi_device *wsi,
       goto fail;
 #endif
 
+#ifndef VK_USE_PLATFORM_WIN32_KHR
+   result = wsi_headless_init_wsi(wsi, alloc, pdevice);
+   if (result != VK_SUCCESS)
+      goto fail;
+#endif
+
    present_mode = getenv("MESA_VK_WSI_PRESENT_MODE");
    if (present_mode) {
       if (!strcmp(present_mode, "fifo")) {
@@ -221,6 +228,9 @@ wsi_device_init(struct wsi_device *wsi,
       }
    }
 
+   wsi->force_headless_swapchain =
+      debug_get_bool_option("MESA_VK_WSI_HEADLESS_SWAPCHAIN", false);
+
    if (dri_options) {
       if (driCheckOption(dri_options, "adaptive_sync", DRI_BOOL))
          wsi->enable_adaptive_sync = driQueryOptionb(dri_options,
@@ -230,23 +240,26 @@ wsi_device_init(struct wsi_device *wsi,
          wsi->force_bgra8_unorm_first =
             driQueryOptionb(dri_options, "vk_wsi_force_bgra8_unorm_first");
       }
+
+      if (driCheckOption(dri_options, "vk_wsi_force_swapchain_to_current_extent",  DRI_BOOL)) {
+         wsi->force_swapchain_to_currentExtent =
+            driQueryOptionb(dri_options, "vk_wsi_force_swapchain_to_current_extent");
+      }
    }
 
    return VK_SUCCESS;
-#if defined(VK_USE_PLATFORM_XCB_KHR) || \
-   defined(VK_USE_PLATFORM_WAYLAND_KHR) || \
-   defined(VK_USE_PLATFORM_WIN32_KHR) || \
-   defined(VK_USE_PLATFORM_DISPLAY_KHR)
 fail:
    wsi_device_finish(wsi, alloc);
    return result;
-#endif
 }
 
 void
 wsi_device_finish(struct wsi_device *wsi,
                   const VkAllocationCallbacks *alloc)
 {
+#ifndef VK_USE_PLATFORM_WIN32_KHR
+   wsi_headless_finish_wsi(wsi, alloc);
+#endif
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
    wsi_display_finish_wsi(wsi, alloc);
 #endif
@@ -461,7 +474,7 @@ wsi_swapchain_is_present_mode_supported(struct wsi_device *wsi,
       bool supported = false;
       VkResult result;
 
-      result = iface->get_present_modes(surface, &present_mode_count, NULL);
+      result = iface->get_present_modes(surface, wsi, &present_mode_count, NULL);
       if (result != VK_SUCCESS)
          return supported;
 
@@ -469,7 +482,7 @@ wsi_swapchain_is_present_mode_supported(struct wsi_device *wsi,
       if (!present_modes)
          return supported;
 
-      result = iface->get_present_modes(surface, &present_mode_count,
+      result = iface->get_present_modes(surface, wsi, &present_mode_count,
                                         present_modes);
       if (result != VK_SUCCESS)
          goto fail;
@@ -875,7 +888,7 @@ wsi_GetPhysicalDeviceSurfacePresentModesKHR(VkPhysicalDevice physicalDevice,
    struct wsi_device *wsi_device = device->wsi_device;
    struct wsi_interface *iface = wsi_device->wsi[surface->platform];
 
-   return iface->get_present_modes(surface, pPresentModeCount,
+   return iface->get_present_modes(surface, wsi_device, pPresentModeCount,
                                    pPresentModes);
 }
 
@@ -904,7 +917,9 @@ wsi_CreateSwapchainKHR(VkDevice _device,
    VK_FROM_HANDLE(vk_device, device, _device);
    ICD_FROM_HANDLE(VkIcdSurfaceBase, surface, pCreateInfo->surface);
    struct wsi_device *wsi_device = device->physical->wsi_device;
-   struct wsi_interface *iface = wsi_device->wsi[surface->platform];
+   struct wsi_interface *iface = wsi_device->force_headless_swapchain ?
+      wsi_device->wsi[VK_ICD_WSI_PLATFORM_HEADLESS] :
+      wsi_device->wsi[surface->platform];
    const VkAllocationCallbacks *alloc;
    struct wsi_swapchain *swapchain;
 
@@ -913,8 +928,22 @@ wsi_CreateSwapchainKHR(VkDevice _device,
    else
      alloc = &device->alloc;
 
+   VkSwapchainCreateInfoKHR info = *pCreateInfo;
+
+   if (wsi_device->force_swapchain_to_currentExtent) {
+      VkSurfaceCapabilities2KHR caps2 = {
+         .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR,
+      };
+      iface->get_capabilities2(surface, wsi_device, NULL, &caps2);
+      info.imageExtent = caps2.surfaceCapabilities.currentExtent;
+   }
+
+   /* Ignore DEFERRED_MEMORY_ALLOCATION_BIT. Would require deep plumbing to be able to take advantage of it.
+    * bool deferred_allocation = pCreateInfo->flags & VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_EXT;
+    */
+
    VkResult result = iface->create_swapchain(surface, _device, wsi_device,
-                                             pCreateInfo, alloc,
+                                             &info, alloc,
                                              &swapchain);
    if (result != VK_SUCCESS)
       return result;
@@ -984,6 +1013,29 @@ wsi_DestroySwapchainKHR(VkDevice _device,
      alloc = &device->alloc;
 
    swapchain->destroy(swapchain, alloc);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+wsi_ReleaseSwapchainImagesEXT(VkDevice _device,
+                              const VkReleaseSwapchainImagesInfoEXT *pReleaseInfo)
+{
+   VK_FROM_HANDLE(wsi_swapchain, swapchain, pReleaseInfo->swapchain);
+   VkResult result = swapchain->release_images(swapchain,
+                                               pReleaseInfo->imageIndexCount,
+                                               pReleaseInfo->pImageIndices);
+
+   if (result != VK_SUCCESS)
+      return result;
+
+   if (swapchain->wsi->set_memory_ownership) {
+      for (uint32_t i = 0; i < pReleaseInfo->imageIndexCount; i++) {
+         uint32_t image_index = pReleaseInfo->pImageIndices[i];
+         VkDeviceMemory mem = swapchain->get_wsi_image(swapchain, image_index)->memory;
+         swapchain->wsi->set_memory_ownership(swapchain->device, mem, false);
+      }
+   }
+
+   return VK_SUCCESS;
 }
 
 VkResult
@@ -1162,9 +1214,10 @@ wsi_AcquireNextImage2KHR(VkDevice _device,
 }
 
 static VkResult wsi_signal_present_id_timeline(struct wsi_swapchain *swapchain,
-                                               VkQueue queue, uint64_t present_id)
+                                               VkQueue queue, uint64_t present_id,
+                                               VkFence present_fence)
 {
-   assert(swapchain->present_id_timeline);
+   assert(swapchain->present_id_timeline || present_fence);
 
    const VkTimelineSemaphoreSubmitInfo timeline_info = {
       .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
@@ -1179,7 +1232,45 @@ static VkResult wsi_signal_present_id_timeline(struct wsi_swapchain *swapchain,
       .pSignalSemaphores = &swapchain->present_id_timeline,
    };
 
-   return swapchain->wsi->QueueSubmit(queue, 1, &submit_info, VK_NULL_HANDLE);
+   uint32_t submit_count = present_id ? 1 : 0;
+   return swapchain->wsi->QueueSubmit(queue, submit_count, &submit_info, present_fence);
+}
+
+static VkResult
+handle_trace(VkQueue queue, struct vk_device *device)
+{
+   struct vk_instance *instance = device->physical->instance;
+   if (!instance->trace_mode)
+      return VK_SUCCESS;
+
+   simple_mtx_lock(&device->trace_mtx);
+
+   bool frame_trigger = device->current_frame == instance->trace_frame;
+   if (device->current_frame <= instance->trace_frame)
+      device->current_frame++;
+
+   bool file_trigger = false;
+#ifndef _WIN32
+   if (instance->trace_trigger_file && access(instance->trace_trigger_file, W_OK) == 0) {
+      if (unlink(instance->trace_trigger_file) == 0) {
+         file_trigger = true;
+      } else {
+         /* Do not enable tracing if we cannot remove the file,
+          * because by then we'll trace every frame ... */
+         fprintf(stderr, "Could not remove trace trigger file, ignoring\n");
+      }
+   }
+#endif
+
+   VkResult result = VK_SUCCESS;
+   if (frame_trigger || file_trigger || device->trace_hotkey_trigger)
+      result = device->capture_trace(queue);
+
+   device->trace_hotkey_trigger = false;
+
+   simple_mtx_unlock(&device->trace_mtx);
+
+   return result;
 }
 
 VkResult
@@ -1189,7 +1280,7 @@ wsi_common_queue_present(const struct wsi_device *wsi,
                          int queue_family_index,
                          const VkPresentInfoKHR *pPresentInfo)
 {
-   VkResult final_result = VK_SUCCESS;
+   VkResult final_result = handle_trace(queue, vk_device_from_handle(device));
 
    STACK_ARRAY(VkPipelineStageFlags, stage_flags,
                MAX2(1, pPresentInfo->waitSemaphoreCount));
@@ -1200,11 +1291,19 @@ wsi_common_queue_present(const struct wsi_device *wsi,
       vk_find_struct_const(pPresentInfo->pNext, PRESENT_REGIONS_KHR);
    const VkPresentIdKHR *present_ids =
       vk_find_struct_const(pPresentInfo->pNext, PRESENT_ID_KHR);
+   const VkSwapchainPresentFenceInfoEXT *present_fence_info =
+      vk_find_struct_const(pPresentInfo->pNext, SWAPCHAIN_PRESENT_FENCE_INFO_EXT);
+   const VkSwapchainPresentModeInfoEXT *present_mode_info =
+      vk_find_struct_const(pPresentInfo->pNext, SWAPCHAIN_PRESENT_MODE_INFO_EXT);
 
    for (uint32_t i = 0; i < pPresentInfo->swapchainCount; i++) {
       VK_FROM_HANDLE(wsi_swapchain, swapchain, pPresentInfo->pSwapchains[i]);
       uint32_t image_index = pPresentInfo->pImageIndices[i];
       VkResult result;
+
+      /* Update the present mode for this present and any subsequent present. */
+      if (present_mode_info && present_mode_info->pPresentModes && swapchain->set_present_mode)
+         swapchain->set_present_mode(swapchain, present_mode_info->pPresentModes[i]);
 
       if (swapchain->fences[image_index] == VK_NULL_HANDLE) {
          const VkFenceCreateInfo fence_info = {
@@ -1351,9 +1450,12 @@ wsi_common_queue_present(const struct wsi_device *wsi,
       uint64_t present_id = 0;
       if (present_ids && present_ids->pPresentIds)
          present_id = present_ids->pPresentIds[i];
+      VkFence present_fence = VK_NULL_HANDLE;
+      if (present_fence_info && present_fence_info->pFences)
+         present_fence = present_fence_info->pFences[i];
 
-      if (present_id) {
-         result = wsi_signal_present_id_timeline(swapchain, queue, present_id);
+      if (present_id || present_fence) {
+         result = wsi_signal_present_id_timeline(swapchain, queue, present_id, present_fence);
          if (result != VK_SUCCESS)
             goto fail_present;
       }

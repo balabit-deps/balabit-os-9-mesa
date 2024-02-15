@@ -70,7 +70,9 @@ impl NirShader {
         unsafe {
             blob_init(&mut blob);
             nir_serialize(&mut blob, self.nir.as_ptr(), false);
-            slice::from_raw_parts(blob.data, blob.size).to_vec()
+            let res = slice::from_raw_parts(blob.data, blob.size).to_vec();
+            blob_finish(&mut blob);
+            res
         }
     }
 
@@ -177,12 +179,44 @@ impl NirShader {
         unsafe { (*self.nir.as_ptr()).info.workgroup_size }
     }
 
+    pub fn subgroup_size(&self) -> u8 {
+        let subgroup_size = unsafe { (*self.nir.as_ptr()).info.subgroup_size };
+        let valid_subgroup_sizes = [
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_8,
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_16,
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_32,
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_64,
+            gl_subgroup_size::SUBGROUP_SIZE_REQUIRE_128,
+        ];
+
+        if valid_subgroup_sizes.contains(&subgroup_size) {
+            subgroup_size as u8
+        } else {
+            0
+        }
+    }
+
+    pub fn num_subgroups(&self) -> u8 {
+        unsafe { (*self.nir.as_ptr()).info.num_subgroups }
+    }
+
     pub fn set_workgroup_size_variable_if_zero(&self) {
         let nir = self.nir.as_ptr();
         unsafe {
             (*nir)
                 .info
                 .set_workgroup_size_variable((*nir).info.workgroup_size[0] == 0);
+        }
+    }
+
+    pub fn set_has_variable_shared_mem(&mut self, val: bool) {
+        unsafe {
+            self.nir
+                .as_mut()
+                .info
+                .anon_1
+                .cs
+                .set_has_variable_shared_mem(val)
         }
     }
 

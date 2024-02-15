@@ -211,6 +211,8 @@ is_overwritten_since(pr_opt_ctx& ctx, PhysReg reg, RegClass rc, const Idx& since
          return true;
       else if (i == overwritten_untrackable || i == not_written_yet)
          continue;
+      else if (i == overwritten_subdword)
+         return true;
 
       assert(i.found());
 
@@ -485,7 +487,7 @@ try_combine_dpp(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
    if (!instr->isVALU() || instr->isDPP())
       return;
 
-   for (unsigned i = 0; i < MIN2(2, instr->operands.size()); i++) {
+   for (unsigned i = 0; i < instr->operands.size(); i++) {
       Idx op_instr_idx = last_writer_idx(ctx, instr->operands[i]);
       if (!op_instr_idx.found())
          continue;
@@ -493,9 +495,6 @@ try_combine_dpp(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
       const Instruction* mov = ctx.get(op_instr_idx);
       if (mov->opcode != aco_opcode::v_mov_b32 || !mov->isDPP())
          continue;
-      bool dpp8 = mov->isDPP8();
-      if (!can_use_DPP(instr, false, dpp8))
-         return;
 
       /* If we aren't going to remove the v_mov_b32, we have to ensure that it doesn't overwrite
        * it's own operand before we use it.
@@ -508,7 +507,27 @@ try_combine_dpp(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
       if (is_overwritten_since(ctx, mov->operands[0], op_instr_idx))
          continue;
 
-      if (i && !can_swap_operands(instr, &instr->opcode))
+      /* We won't eliminate the DPP mov if the operand is used twice */
+      bool op_used_twice = false;
+      for (unsigned j = 0; j < instr->operands.size(); j++)
+         op_used_twice |= i != j && instr->operands[i] == instr->operands[j];
+      if (op_used_twice)
+         continue;
+
+      bool dpp8 = mov->isDPP8();
+      bool input_mods = can_use_input_modifiers(ctx.program->gfx_level, instr->opcode, i) &&
+                        get_operand_size(instr, i) == 32;
+      bool mov_uses_mods = mov->valu().neg[0] || mov->valu().abs[0];
+      if (((dpp8 && ctx.program->gfx_level < GFX11) || !input_mods) && mov_uses_mods)
+         continue;
+
+      if (i != 0) {
+         if (!can_swap_operands(instr, &instr->opcode, 0, i))
+            continue;
+         instr->valu().swapOperands(0, i);
+      }
+
+      if (!can_use_DPP(ctx.program->gfx_level, instr, dpp8))
          continue;
 
       if (!dpp8) /* anything else doesn't make sense in SSA */
@@ -517,28 +536,22 @@ try_combine_dpp(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
       if (--ctx.uses[mov->definitions[0].tempId()])
          ctx.uses[mov->operands[0].tempId()]++;
 
-      convert_to_DPP(instr, dpp8);
+      convert_to_DPP(ctx.program->gfx_level, instr, dpp8);
+
+      instr->operands[0] = mov->operands[0];
 
       if (dpp8) {
          DPP8_instruction* dpp = &instr->dpp8();
-         if (i) {
-            std::swap(dpp->operands[0], dpp->operands[1]);
-         }
-         dpp->operands[0] = mov->operands[0];
          memcpy(dpp->lane_sel, mov->dpp8().lane_sel, sizeof(dpp->lane_sel));
+         if (mov_uses_mods)
+            instr->format = asVOP3(instr->format);
       } else {
          DPP16_instruction* dpp = &instr->dpp16();
-         if (i) {
-            std::swap(dpp->operands[0], dpp->operands[1]);
-            std::swap(dpp->neg[0], dpp->neg[1]);
-            std::swap(dpp->abs[0], dpp->abs[1]);
-         }
-         dpp->operands[0] = mov->operands[0];
          dpp->dpp_ctrl = mov->dpp16().dpp_ctrl;
          dpp->bound_ctrl = true;
-         dpp->neg[0] ^= mov->dpp16().neg[0] && !dpp->abs[0];
-         dpp->abs[0] |= mov->dpp16().abs[0];
       }
+      instr->valu().neg[0] ^= mov->valu().neg[0] && !instr->valu().abs[0];
+      instr->valu().abs[0] |= mov->valu().abs[0];
       return;
    }
 }
@@ -563,7 +576,7 @@ num_encoded_alu_operands(const aco_ptr<Instruction>& instr)
       else if (instr->opcode == aco_opcode::v_writelane_b32_e64 ||
                instr->opcode == aco_opcode::v_writelane_b32)
          return 2; /* potentially VOP3, but reads VDST as SRC2 */
-      else if (instr->isVOP3() || instr->isVOP3P())
+      else if (instr->isVOP3() || instr->isVOP3P() || instr->isVINTERP_INREG())
          return instr->operands.size();
    }
 
@@ -620,7 +633,8 @@ try_reassign_split_vector(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
 
       /* Check if the operand is written by p_split_vector. */
       Instruction* split_vec = ctx.get(op_instr_idx);
-      if (split_vec->opcode != aco_opcode::p_split_vector)
+      if (split_vec->opcode != aco_opcode::p_split_vector &&
+          split_vec->opcode != aco_opcode::p_extract_vector)
          continue;
 
       Operand& split_op = split_vec->operands[0];
@@ -641,6 +655,10 @@ try_reassign_split_vector(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
          continue;
 
       PhysReg reg = split_op.physReg();
+      if (split_vec->opcode == aco_opcode::p_extract_vector) {
+         reg =
+            reg.advance(split_vec->definitions[0].bytes() * split_vec->operands[1].constantValue());
+      }
       for (Definition& def : split_vec->definitions) {
          if (def.getTemp() != op.getTemp()) {
             reg = reg.advance(def.bytes());
@@ -652,6 +670,11 @@ try_reassign_split_vector(pr_opt_ctx& ctx, aco_ptr<Instruction>& instr)
           */
          if (op.regClass() == s2 && reg.reg() % 2 != 0)
             break;
+
+         /* Sub dword operands might need updates to SDWA/opsel,
+          * but we only track full register writes at the moment.
+          */
+         assert(op.physReg().byte() == reg.byte());
 
          /* If there is only one use (left), recolor the split_vector definition */
          if (ctx.uses[op.tempId()] == 1)

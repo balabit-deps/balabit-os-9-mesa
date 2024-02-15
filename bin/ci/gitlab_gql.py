@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# For the dependencies, see the requirements.txt
 
 import re
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser, Namespace
@@ -51,7 +52,8 @@ class GitlabGQL:
         headers = {}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        self._transport = AIOHTTPTransport(url=self.url, headers=headers)
+        self._transport = AIOHTTPTransport(
+            url=self.url, headers=headers, client_session_args = { "trust_env": True })
 
         # Create a GraphQL client using the defined transport
         self.client = Client(
@@ -211,7 +213,7 @@ def recurse_among_variables_space(var_graph) -> bool:
     return updated
 
 
-def get_job_final_definiton(job_name, merged_yaml, project_path, sha):
+def get_job_final_definition(job_name, merged_yaml, project_path, sha):
     job = merged_yaml[job_name]
     variables = get_variables(job, merged_yaml, project_path, sha)
 
@@ -294,7 +296,7 @@ def main():
         merged_yaml = fetch_merged_yaml(
             gl_gql, {"projectPath": args.project_path, "sha": args.sha}
         )
-        get_job_final_definiton(
+        get_job_final_definition(
             args.print_job_manifest, merged_yaml, args.project_path, args.sha
         )
 

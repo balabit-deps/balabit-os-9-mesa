@@ -178,6 +178,9 @@ lower_alu_instr(nir_builder *b, nir_alu_instr *alu)
    case nir_op_bany_inequal3: alu->op = nir_op_bany_fnequal3; break;
    case nir_op_bany_inequal4: alu->op = nir_op_bany_fnequal4; break;
 
+   case nir_op_i32csel_gt: alu->op = nir_op_fcsel_gt; break;
+   case nir_op_i32csel_ge: alu->op = nir_op_fcsel_ge; break;
+
    default:
       assert(nir_alu_type_get_base_type(info->output_type) != nir_type_int &&
              nir_alu_type_get_base_type(info->output_type) != nir_type_uint);
@@ -203,8 +206,7 @@ nir_lower_int_to_float_impl(nir_function_impl *impl)
    bool progress = false;
    BITSET_WORD *float_types = NULL, *int_types = NULL;
 
-   nir_builder b;
-   nir_builder_init(&b, impl);
+   nir_builder b = nir_builder_create(impl);
 
    nir_index_ssa_defs(impl);
    float_types = calloc(BITSET_WORDS(impl->ssa_alloc),
@@ -260,8 +262,8 @@ nir_lower_int_to_float(nir_shader *shader)
 {
    bool progress = false;
 
-   nir_foreach_function(function, shader) {
-      if (function->impl && nir_lower_int_to_float_impl(function->impl))
+   nir_foreach_function_impl(impl, shader) {
+      if (nir_lower_int_to_float_impl(impl))
          progress = true;
    }
 

@@ -79,36 +79,21 @@ class CommitWidget(urwid.Text):
         self.commit = commit
 
     async def apply(self) -> None:
-        async with core.GIT_LOCK.write():
-            result, err = await self.commit.apply()
+        async with self.ui.git_lock:
+            result, err = await self.commit.apply(self.ui)
             if not result:
-                await self.ui.feedback(
-                    f'{self.commit.sha} ({self.commit.description}) failed to apply\n{err}')
                 self.ui.chp_failed(self, err)
             else:
-                await self.ui.feedback(
-                    f'{self.commit.sha} ({self.commit.description}) applied successfully')
-                await self.ui.check_new_commits(self.commit)
-                await self.ui.save()
-                await core.commit_state(amend=True)
-
                 self.ui.remove_commit(self)
 
     async def denominate(self) -> None:
-        async with core.GIT_LOCK.write():
-            await self.commit.denominate()
-            await self.ui.save()
-            await core.commit_state(message=f'Mark {self.commit.sha} as denominated')
-            await self.ui.feedback(f'{self.commit.sha} ({self.commit.description}) denominated successfully')
+        async with self.ui.git_lock:
+            await self.commit.denominate(self.ui)
             self.ui.remove_commit(self)
 
     async def backport(self) -> None:
-        async with core.GIT_LOCK.write():
-            await self.commit.backport()
-            await self.ui.check_new_commits(self.commit)
-            await self.ui.save()
-            await core.commit_state(message=f'Mark {self.commit.sha} as backported')
-            await self.ui.feedback(f'{self.commit.sha} ({self.commit.description}) marked as backported')
+        async with self.ui.git_lock:
+            await self.commit.backport(self.ui)
             self.ui.remove_commit(self)
 
     def keypress(self, size: int, key: str) -> typing.Optional[str]:
@@ -160,6 +145,7 @@ class UI:
 
     previous_commits: typing.List['core.Commit'] = attr.ib(factory=list, init=False)
     new_commits: typing.List['core.Commit'] = attr.ib(factory=list, init=False)
+    git_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False)
 
     def _get_current_commit(self) -> typing.Optional['core.Commit']:
         entry = self.commit_list.get_focus()[0]
@@ -238,18 +224,7 @@ class UI:
             if commit.nominated and commit.resolution is core.Resolution.UNRESOLVED:
                 b = urwid.AttrMap(CommitWidget(self, commit), None, focus_map='reversed')
                 self.commit_list.append(b)
-        await self.save()
-
-    async def check_new_commits(self, commit: core.Commit) -> None:
-        """After applying a commit, check for any new commits that affect that commit.
-
-        :param commit: _description_
-        """
-        new = await core.changes_commit(
-            commit, [c.base_widget.commit for c in self.commit_list])
-        if new:
-            # TODO: this will place them out of order
-            self.commit_list.extend([CommitWidget(self, c) for c in new])
+        self.save()
 
     async def feedback(self, text: str) -> None:
         self.feedback_box.append(urwid.AttrMap(urwid.Text(text), None))
@@ -262,7 +237,7 @@ class UI:
                 del self.commit_list[i]
                 break
 
-    async def save(self) -> None:
+    def save(self):
         core.save(itertools.chain(self.new_commits, self.previous_commits))
 
     def add(self) -> None:
@@ -287,8 +262,7 @@ class UI:
             else:
                 raise RuntimeError(f"Couldn't find {sha}")
 
-            wid = CommitWidget(self, commit)
-            await wid.apply()
+            await commit.apply(self)
 
         q = urwid.Edit("Commit sha\n")
         ok_btn = urwid.Button('Ok')

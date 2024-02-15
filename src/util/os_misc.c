@@ -107,6 +107,7 @@ os_log_message(const char *message)
 
 #if DETECT_OS_WINDOWS
    OutputDebugStringA(message);
+#if !defined(_GAMING_XBOX)
    if(GetConsoleWindow() && !IsDebuggerPresent()) {
       fflush(stdout);
       fputs(message, fout);
@@ -116,6 +117,7 @@ os_log_message(const char *message)
       fputs(message, fout);
       fflush(fout);
    }
+#endif
 #else /* !DETECT_OS_WINDOWS */
    fflush(stdout);
    fputs(message, fout);
@@ -290,7 +292,7 @@ os_get_total_physical_memory(uint64_t *size)
    status.dwLength = sizeof(status);
    ret = GlobalMemoryStatusEx(&status);
    *size = status.ullTotalPhys;
-   return (ret == TRUE);
+   return (ret == true);
 #else
 #error unexpected platform in os_misc.c
    return false;
@@ -347,7 +349,7 @@ os_get_available_system_memory(uint64_t *size)
    status.dwLength = sizeof(status);
    ret = GlobalMemoryStatusEx(&status);
    *size = status.ullAvailPhys;
-   return (ret == TRUE);
+   return (ret == true);
 #else
    return false;
 #endif

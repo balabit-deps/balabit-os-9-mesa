@@ -92,7 +92,8 @@ combine_and_pin_address(struct blorp_batch *blorp_batch,
    struct iris_batch *batch = blorp_batch->driver_batch;
    struct iris_bo *bo = addr.buffer;
 
-   iris_use_pinned_bo(batch, bo, addr.reloc_flags & RELOC_WRITE,
+   iris_use_pinned_bo(batch, bo,
+                      addr.reloc_flags & IRIS_BLORP_RELOC_FLAGS_EXEC_OBJECT_WRITE,
                       IRIS_DOMAIN_NONE);
 
    /* Assume this is a general address, not relative to a base. */
@@ -363,8 +364,8 @@ iris_blorp_exec_render(struct blorp_batch *blorp_batch,
                                IRIS_STAGE_DIRTY_SAMPLER_STATES_TES |
                                IRIS_STAGE_DIRTY_SAMPLER_STATES_GS);
 
-   if (!ice->shaders.uncompiled[MESA_SHADER_TESS_EVAL]) {
-      /* BLORP disabled tessellation, that's fine for the next draw */
+   if (!ice->shaders.prog[MESA_SHADER_TESS_EVAL]) {
+      /* BLORP disabled tessellation, but it was already off anyway */
       skip_stage_bits |= IRIS_STAGE_DIRTY_TCS |
                          IRIS_STAGE_DIRTY_TES |
                          IRIS_STAGE_DIRTY_CONSTANTS_TCS |
@@ -373,8 +374,8 @@ iris_blorp_exec_render(struct blorp_batch *blorp_batch,
                          IRIS_STAGE_DIRTY_BINDINGS_TES;
    }
 
-   if (!ice->shaders.uncompiled[MESA_SHADER_GEOMETRY]) {
-      /* BLORP disabled geometry shaders, that's fine for the next draw */
+   if (!ice->shaders.prog[MESA_SHADER_GEOMETRY]) {
+      /* BLORP disabled geometry shaders, but it was already off anyway */
       skip_stage_bits |= IRIS_STAGE_DIRTY_GS |
                          IRIS_STAGE_DIRTY_CONSTANTS_GS |
                          IRIS_STAGE_DIRTY_BINDINGS_GS;

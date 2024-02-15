@@ -19,10 +19,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
- *
  */
 
 #include "brw_nir.h"
@@ -36,12 +32,11 @@
 static inline bool
 are_all_uses_fadd(nir_ssa_def *def)
 {
-   if (!list_is_empty(&def->if_uses))
-      return false;
+   nir_foreach_use_including_if(use_src, def) {
+      if (use_src->is_if)
+         return false;
 
-   nir_foreach_use(use_src, def) {
       nir_instr *use_instr = use_src->parent_instr;
-
       if (use_instr->type != nir_instr_type_alu)
          return false;
 
@@ -152,10 +147,8 @@ any_alu_src_is_a_constant(nir_alu_src srcs[])
          nir_load_const_instr *load_const =
             nir_instr_as_load_const (srcs[i].src.ssa->parent_instr);
 
-         if (list_is_singular(&load_const->def.uses) &&
-             list_is_empty(&load_const->def.if_uses)) {
+         if (list_is_singular(&load_const->def.uses))
             return true;
-         }
       }
    }
 
@@ -248,8 +241,7 @@ brw_nir_opt_peephole_ffma_instr(nir_builder *b,
    assert(add->dest.dest.is_ssa);
 
    nir_ssa_dest_init(&ffma->instr, &ffma->dest.dest,
-                     add->dest.dest.ssa.num_components,
-                     bit_size, NULL);
+                     add->dest.dest.ssa.num_components, bit_size);
    nir_ssa_def_rewrite_uses(&add->dest.dest.ssa, &ffma->dest.dest.ssa);
 
    nir_builder_instr_insert(b, &ffma->instr);

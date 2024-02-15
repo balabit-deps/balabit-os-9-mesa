@@ -1,28 +1,11 @@
 /*
- * Copyright (C) 2022 Alyssa Rosenzweig
- * Copyright (C) 2021 Collabora, Ltd.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright 2022 Alyssa Rosenzweig
+ * Copyright 2021 Collabora, Ltd.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "agx_compiler.h"
+#include "agx_debug.h"
 
 /* Validatation doesn't make sense in release builds */
 #ifndef NDEBUG
@@ -103,8 +86,7 @@ agx_validate_sources(agx_instr *I)
          agx_validate_assert(!src.cache);
          agx_validate_assert(!src.discard);
 
-         bool ldst = (I->op == AGX_OPCODE_DEVICE_LOAD) ||
-                     (I->op == AGX_OPCODE_UNIFORM_STORE);
+         bool ldst = agx_allows_16bit_immediate(I);
 
          /* Immediates are encoded as 8-bit (16-bit for memory load/store). For
           * integers, they extend to 16-bit. For floating point, they are 8-bit
@@ -114,6 +96,8 @@ agx_validate_sources(agx_instr *I)
           */
          agx_validate_assert(src.size == AGX_SIZE_16);
          agx_validate_assert(src.value < (1 << (ldst ? 16 : 8)));
+      } else if (I->op == AGX_OPCODE_COLLECT && !agx_is_null(src)) {
+         agx_validate_assert(src.size == I->src[0].size);
       }
    }
 
@@ -186,17 +170,64 @@ agx_validate_width(agx_context *ctx)
    return succ;
 }
 
+static bool
+agx_validate_predecessors(agx_block *block)
+{
+   /* Loop headers (only) have predecessors that are later in source form */
+   bool has_later_preds = false;
+
+   agx_foreach_predecessor(block, pred) {
+      if ((*pred)->index >= block->index)
+         has_later_preds = true;
+   }
+
+   if (block->loop_header != has_later_preds)
+      return false;
+
+   /* Successors and predecessors are found together */
+   agx_foreach_predecessor(block, pred) {
+      bool found = false;
+
+      agx_foreach_successor((*pred), succ) {
+         if (succ == block)
+            found = true;
+      }
+
+      if (!found)
+         return false;
+   }
+
+   return true;
+}
+
 void
 agx_validate(agx_context *ctx, const char *after)
 {
    bool fail = false;
 
-   if (agx_debug & AGX_DBG_NOVALIDATE)
+   if (agx_compiler_debug & AGX_DBG_NOVALIDATE)
       return;
 
+   int last_index = -1;
+
    agx_foreach_block(ctx, block) {
+      if ((int)block->index < last_index) {
+         fprintf(stderr, "Out-of-order block index %d vs %d after %s\n",
+                 block->index, last_index, after);
+         agx_print_block(block, stdout);
+         fail = true;
+      }
+
+      last_index = block->index;
+
       if (!agx_validate_block_form(block)) {
          fprintf(stderr, "Invalid block form after %s\n", after);
+         agx_print_block(block, stdout);
+         fail = true;
+      }
+
+      if (!agx_validate_predecessors(block)) {
+         fprintf(stderr, "Invalid loop header flag after %s\n", after);
          agx_print_block(block, stdout);
          fail = true;
       }

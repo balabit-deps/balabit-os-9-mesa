@@ -84,7 +84,6 @@ pack_blend(struct v3dv_pipeline *pipeline,
       return;
 
    assert(pipeline->subpass->color_count == cb_info->attachmentCount);
-
    pipeline->blend.needs_color_constants = false;
    uint32_t color_write_masks = 0;
    for (uint32_t i = 0; i < pipeline->subpass->color_count; i++) {
@@ -104,7 +103,12 @@ pack_blend(struct v3dv_pipeline *pipeline,
       VkAttachmentDescription2 *desc =
          &pipeline->pass->attachments[attachment_idx].desc;
       const struct v3dv_format *format = v3dX(get_format)(desc->format);
-      bool dst_alpha_one = (format->swizzle[3] == PIPE_SWIZZLE_1);
+
+      /* We only do blending with render pass attachments, so we should not have
+       * multiplanar images here
+       */
+      assert(format->plane_count == 1);
+      bool dst_alpha_one = (format->planes[0].swizzle[3] == PIPE_SWIZZLE_1);
 
       uint8_t rt_mask = 1 << i;
       pipeline->blend.enables |= rt_mask;
@@ -160,7 +164,11 @@ pack_cfg_bits(struct v3dv_pipeline *pipeline,
       config.clockwise_primitives =
          rs_info ? rs_info->frontFace == VK_FRONT_FACE_COUNTER_CLOCKWISE : false;
 
-      config.enable_depth_offset = rs_info ? rs_info->depthBiasEnable: false;
+      /* Even if rs_info->depthBiasEnabled is true, we can decide to not
+       * enable it, like if there isn't a depth/stencil attachment with the
+       * pipeline.
+       */
+      config.enable_depth_offset = pipeline->depth_bias.enabled;
 
       /* This is required to pass line rasterization tests in CTS while
        * exposing, at least, a minimum of 4-bits of subpixel precision
@@ -214,10 +222,6 @@ pack_cfg_bits(struct v3dv_pipeline *pipeline,
       } else {
          config.depth_test_function = VK_COMPARE_OP_ALWAYS;
       }
-
-      /* EZ state will be updated at draw time based on bound pipeline state */
-      config.early_z_updates_enable = false;
-      config.early_z_enable = false;
 
       config.stencil_enable =
          ds_info ? ds_info->stencilTestEnable && has_ds_attachment: false;
@@ -380,7 +384,7 @@ pack_shader_state_record(struct v3dv_pipeline *pipeline)
 
       if (!pipeline->has_gs) {
          shader.point_size_in_shaded_vertex_data =
-            pipeline->topology == PIPE_PRIM_POINTS;
+            pipeline->topology == MESA_PRIM_POINTS;
       } else {
          struct v3d_gs_prog_data *prog_data_gs =
             pipeline->shared_data->variants[BROADCOM_SHADER_GEOMETRY]->prog_data.gs;

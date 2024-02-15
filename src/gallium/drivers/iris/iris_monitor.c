@@ -62,7 +62,8 @@ iris_get_monitor_info(struct pipe_screen *pscreen, unsigned index,
    intel_perf_query_result_clear(&results);
 
    info->group_id = counter_info->location.group_idx;
-   info->name = counter->name;
+   info->name = INTEL_DEBUG(DEBUG_PERF_SYMBOL_NAMES) ?
+      counter->symbol_name : counter->name;
    info->query_type = PIPE_QUERY_DRIVER_SPECIFIC + index;
 
    if (counter->type == INTEL_PERF_COUNTER_TYPE_THROUGHPUT)
@@ -170,7 +171,7 @@ iris_init_monitor_ctx(struct iris_context *ice)
                          ice,
                          screen->bufmgr,
                          screen->devinfo,
-                         ice->batches[IRIS_BATCH_RENDER].ctx_id,
+                         ice->batches[IRIS_BATCH_RENDER].i915.ctx_id,
                          screen->fd);
 }
 

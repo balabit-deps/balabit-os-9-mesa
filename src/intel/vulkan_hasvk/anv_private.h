@@ -88,6 +88,7 @@
 #include "vk_util.h"
 #include "vk_queue.h"
 #include "vk_log.h"
+#include "vk_ycbcr_conversion.h"
 
 /* Pre-declarations needed for WSI entrypoints */
 struct wl_surface;
@@ -947,6 +948,9 @@ struct anv_instance {
     bool                                        limit_trig_input_range;
     bool                                        sample_mask_out_opengl_behaviour;
     float                                       lower_depth_range_rate;
+
+    /* HW workarounds */
+    bool                                        no_16bit;
 };
 
 VkResult anv_init_wsi(struct anv_physical_device *physical_device);
@@ -958,8 +962,6 @@ struct anv_queue {
    struct anv_device *                       device;
 
    const struct anv_queue_family *           family;
-
-   uint32_t                                  index_in_family;
 
    uint32_t                                  exec_flags;
 
@@ -1018,7 +1020,6 @@ struct anv_device {
     uint32_t                                    context_id;
     int                                         fd;
     bool                                        can_chain_batches;
-    bool                                        robust_buffer_access;
 
     pthread_mutex_t                             vma_mutex;
     struct util_vma_heap                        vma_lo;
@@ -1075,6 +1076,8 @@ struct anv_device {
     struct anv_queue  *                         queues;
 
     struct anv_scratch_pool                     scratch_pool;
+
+    bool                                        robust_buffer_access;
 
     pthread_mutex_t                             mutex;
     pthread_cond_t                              queue_submit;
@@ -1281,8 +1284,6 @@ int anv_gem_context_get_reset_stats(int fd, int context,
 int anv_gem_handle_to_fd(struct anv_device *device, uint32_t gem_handle);
 uint32_t anv_gem_fd_to_handle(struct anv_device *device, int fd);
 int anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle, uint32_t caching);
-int anv_i915_query(int fd, uint64_t query_id, void *buffer,
-                   int32_t *buffer_len);
 
 uint64_t anv_vma_alloc(struct anv_device *device,
                        uint64_t size, uint64_t align,
@@ -2364,6 +2365,18 @@ struct anv_vb_cache_range {
    uint64_t end;
 };
 
+static inline void
+anv_merge_vb_cache_range(struct anv_vb_cache_range *dirty,
+                         const struct anv_vb_cache_range *bound)
+{
+   if (dirty->start == dirty->end) {
+      *dirty = *bound;
+   } else if (bound->start != bound->end) {
+      dirty->start = MIN2(dirty->start, bound->start);
+      dirty->end = MAX2(dirty->end, bound->end);
+   }
+}
+
 /* Check whether we need to apply the Gfx8-9 vertex buffer workaround*/
 static inline bool
 anv_gfx8_9_vb_cache_range_needs_workaround(struct anv_vb_cache_range *bound,
@@ -2386,9 +2399,7 @@ anv_gfx8_9_vb_cache_range_needs_workaround(struct anv_vb_cache_range *bound,
    bound->start &= ~(64ull - 1ull);
    bound->end = align64(bound->end, 64);
 
-   /* Compute the dirty range */
-   dirty->start = MIN2(dirty->start, bound->start);
-   dirty->end = MAX2(dirty->end, bound->end);
+   anv_merge_vb_cache_range(dirty, bound);
 
    /* If our range is larger than 32 bits, we have to flush */
    assert(bound->end - bound->start <= (1ull << 32));
@@ -2809,7 +2820,7 @@ anv_shader_bin_ref(struct anv_shader_bin *shader)
 static inline void
 anv_shader_bin_unref(struct anv_device *device, struct anv_shader_bin *shader)
 {
-   vk_pipeline_cache_object_unref(&shader->base);
+   vk_pipeline_cache_object_unref(&device->vk, &shader->base);
 }
 
 struct anv_pipeline_executable {
@@ -3448,31 +3459,6 @@ anv_can_sample_with_hiz(const struct intel_device_info * const devinfo,
    return image->vk.samples == 1;
 }
 
-/* Returns true if an MCS-enabled buffer can be sampled from. */
-static inline bool
-anv_can_sample_mcs_with_clear(const struct intel_device_info * const devinfo,
-                              const struct anv_image *image)
-{
-   assert(image->vk.aspects == VK_IMAGE_ASPECT_COLOR_BIT);
-   const uint32_t plane =
-      anv_image_aspect_to_plane(image, VK_IMAGE_ASPECT_COLOR_BIT);
-
-   assert(isl_aux_usage_has_mcs(image->planes[plane].aux_usage));
-
-   const struct anv_surface *anv_surf = &image->planes[plane].primary_surface;
-
-   /* On TGL, the sampler has an issue with some 8 and 16bpp MSAA fast clears.
-    * See HSD 1707282275, wa_14013111325. Due to the use of
-    * format-reinterpretation, a simplified workaround is implemented.
-    */
-   if (devinfo->ver >= 12 &&
-       isl_format_get_layout(anv_surf->isl.format)->bpb <= 16) {
-      return false;
-   }
-
-   return true;
-}
-
 void
 anv_cmd_buffer_mark_image_written(struct anv_cmd_buffer *cmd_buffer,
                                   const struct anv_image *image,
@@ -3717,24 +3703,12 @@ struct gfx8_border_color {
    uint32_t _pad[12];
 };
 
-struct anv_ycbcr_conversion {
-   struct vk_object_base base;
-
-   const struct anv_format *        format;
-   VkSamplerYcbcrModelConversion    ycbcr_model;
-   VkSamplerYcbcrRange              ycbcr_range;
-   VkComponentSwizzle               mapping[4];
-   VkChromaLocation                 chroma_offsets[2];
-   VkFilter                         chroma_filter;
-   bool                             chroma_reconstruction;
-};
-
 struct anv_sampler {
    struct vk_object_base        base;
 
    uint32_t                     state[3][4];
    uint32_t                     n_planes;
-   struct anv_ycbcr_conversion *conversion;
+   struct vk_ycbcr_conversion  *conversion;
 
    /* Blob of sampler state data which is guaranteed to be 32-byte aligned
     * and with a 32-byte stride for use as bindless samplers.
@@ -3901,9 +3875,6 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(anv_query_pool, base, VkQueryPool,
                                VK_OBJECT_TYPE_QUERY_POOL)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_sampler, base, VkSampler,
                                VK_OBJECT_TYPE_SAMPLER)
-VK_DEFINE_NONDISP_HANDLE_CASTS(anv_ycbcr_conversion, base,
-                               VkSamplerYcbcrConversion,
-                               VK_OBJECT_TYPE_SAMPLER_YCBCR_CONVERSION)
 VK_DEFINE_NONDISP_HANDLE_CASTS(anv_performance_configuration_intel, base,
                                VkPerformanceConfigurationINTEL,
                                VK_OBJECT_TYPE_PERFORMANCE_CONFIGURATION_INTEL)

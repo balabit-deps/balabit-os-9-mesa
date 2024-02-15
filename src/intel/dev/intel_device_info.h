@@ -31,6 +31,7 @@
 #include "util/bitset.h"
 #include "util/macros.h"
 #include "compiler/shader_enums.h"
+#include "intel_kmd.h"
 
 #include "intel/common/intel_engine.h"
 #include "intel/dev/intel_wa.h"
@@ -76,6 +77,8 @@ enum intel_platform {
    INTEL_PLATFORM_GROUP_START(DG2, INTEL_PLATFORM_DG2_G10),
    INTEL_PLATFORM_DG2_G11,
    INTEL_PLATFORM_GROUP_END(DG2, INTEL_PLATFORM_DG2_G12),
+   INTEL_PLATFORM_GROUP_START(ATSM, INTEL_PLATFORM_ATSM_G10),
+   INTEL_PLATFORM_GROUP_END(ATSM, INTEL_PLATFORM_ATSM_G11),
    INTEL_PLATFORM_GROUP_START(MTL, INTEL_PLATFORM_MTL_M),
    INTEL_PLATFORM_GROUP_END(MTL, INTEL_PLATFORM_MTL_P),
 };
@@ -87,17 +90,29 @@ enum intel_platform {
    (((platform) >= INTEL_PLATFORM_ ## platform_range ## _START) && \
     ((platform) <= INTEL_PLATFORM_ ## platform_range ## _END))
 
+#define intel_device_info_is_atsm(devinfo) \
+   intel_platform_in_range((devinfo)->platform, ATSM)
+
 #define intel_device_info_is_dg2(devinfo) \
-   intel_platform_in_range((devinfo)->platform, DG2)
+   (intel_platform_in_range((devinfo)->platform, DG2) || \
+    intel_platform_in_range((devinfo)->platform, ATSM))
 
 #define intel_device_info_is_mtl(devinfo) \
    intel_platform_in_range((devinfo)->platform, MTL)
+
+struct intel_memory_class_instance {
+   /* Kernel backend specific class value, no translation needed yet */
+   uint16_t klass;
+   uint16_t instance;
+};
 
 /**
  * Intel hardware information and quirks
  */
 struct intel_device_info
 {
+   enum intel_kmd_type kmd_type;
+
    /* Driver internal numbers used to differentiate platforms. */
    int ver;
    int verx10;
@@ -158,6 +173,7 @@ struct intel_device_info
    bool has_mmap_offset;
    bool has_userptr_probe;
    bool has_context_isolation;
+   bool has_set_pat_uapi;
 
    /**
     * \name Intel hardware quirks
@@ -170,6 +186,11 @@ struct intel_device_info
     * primitive in geometry shaders and by a control buffer.
     */
    bool has_coarse_pixel_primitive_and_cb;
+
+   /**
+    * Whether this platform has compute engine
+    */
+   bool has_compute_engine;
 
    /**
     * Some versions of Gen hardware don't do centroid interpolation correctly
@@ -357,11 +378,22 @@ struct intel_device_info
     */
    unsigned max_constant_urb_size_kb;
 
+   /* Maximum size that can be allocated to constants in mesh pipeline.
+    * This essentially applies to fragment shaders only, since mesh stages
+    * don't need to allocate space for push constants.
+    */
+   unsigned mesh_max_constant_urb_size_kb;
+
    /**
     * Size of the command streamer prefetch. This is important to know for
     * self modifying batches.
     */
    unsigned engine_class_prefetch[INTEL_ENGINE_CLASS_COMPUTE + 1];
+
+   /**
+    * Memory alignment requirement for this device.
+    */
+   unsigned mem_alignment;
 
    /**
     * For the longest time the timestamp frequency for Gen's timestamp counter
@@ -412,14 +444,19 @@ struct intel_device_info
    struct {
       bool use_class_instance;
       struct {
-         uint16_t mem_class;
-         uint16_t mem_instance;
+         struct intel_memory_class_instance mem;
          struct {
             uint64_t size;
             uint64_t free;
          } mappable, unmappable;
       } sram, vram;
    } mem;
+
+   struct {
+      uint8_t coherent;
+      uint8_t scanout;
+      uint8_t writeback;
+   } pat;
 
    BITSET_DECLARE(workarounds, INTEL_WA_NUM);
    /** @} */
@@ -543,10 +580,18 @@ bool intel_get_device_info_from_pci_id(int pci_id,
 bool intel_device_info_update_memory_info(struct intel_device_info *devinfo,
                                           int fd);
 
+void intel_device_info_topology_reset_masks(struct intel_device_info *devinfo);
+void intel_device_info_topology_update_counts(struct intel_device_info *devinfo);
+void intel_device_info_update_pixel_pipes(struct intel_device_info *devinfo, uint8_t *subslice_masks);
+void intel_device_info_update_l3_banks(struct intel_device_info *devinfo);
+void intel_device_info_update_cs_workgroup_threads(struct intel_device_info *devinfo);
+bool intel_device_info_compute_system_memory(struct intel_device_info *devinfo, bool update);
+void intel_device_info_update_after_hwconfig(struct intel_device_info *devinfo);
+
 #ifdef GFX_VERx10
 #define intel_needs_workaround(devinfo, id)         \
-   INTEL_WA_ ## id ## _GFX_VER &&                              \
-   BITSET_TEST(devinfo->workarounds, INTEL_WA_##id)
+   (INTEL_WA_ ## id ## _GFX_VER &&                              \
+    BITSET_TEST(devinfo->workarounds, INTEL_WA_##id))
 #else
 #define intel_needs_workaround(devinfo, id) \
    BITSET_TEST(devinfo->workarounds, INTEL_WA_##id)

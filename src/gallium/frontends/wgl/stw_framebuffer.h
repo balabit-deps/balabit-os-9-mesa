@@ -100,9 +100,9 @@ struct stw_framebuffer
 
    
    /* FIXME: Make this work for multiple contexts bound to the same framebuffer */
-   boolean must_resize;
+   bool must_resize;
 
-   boolean minimized;  /**< Is the window currently minimized? */
+   bool minimized;  /**< Is the window currently minimized? */
 
    unsigned width;
    unsigned height;
@@ -111,7 +111,7 @@ struct stw_framebuffer
    unsigned textureFormat;  /**< WGL_NO_TEXTURE or WGL_TEXTURE_RGB[A]_ARB */
    unsigned textureTarget;  /**< WGL_NO_TEXTURE or WGL_TEXTURE_1D/2D/
                                  CUBE_MAP_ARB */
-   boolean textureMipmap;   /**< TRUE/FALSE */
+   bool textureMipmap;   /**< TRUE/FALSE */
    /** WGL_ARB_render_texture - set with wglSetPbufferAttribARB() */
    unsigned textureLevel;
    unsigned textureFace;    /**< [0..6] */
@@ -131,6 +131,11 @@ struct stw_framebuffer
    /* For WGL_EXT_swap_control */
    int swap_interval;
    int64_t prev_swap_time;
+
+#ifdef _GAMING_XBOX
+   /* For the WndProc hook chain */
+   WNDPROC prev_wndproc;
+#endif
 
    /** 
     * This is protected by stw_device::fb_mutex, not the mutex above.

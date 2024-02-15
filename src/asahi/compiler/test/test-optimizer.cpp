@@ -1,24 +1,6 @@
 /*
- * Copyright (C) 2021 Collabora, Ltd.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright 2021 Collabora, Ltd.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "agx_test.h"
@@ -29,7 +11,7 @@ static void
 agx_optimize_and_dce(agx_context *ctx)
 {
    agx_optimizer(ctx);
-   agx_dce(ctx);
+   agx_dce(ctx, true);
 }
 
 #define CASE(instr, expected, size)                                            \
@@ -94,6 +76,25 @@ TEST_F(Optimizer, FloatCopyprop)
 
    CASE32(agx_fadd_to(b, out, agx_neg(agx_fmov(b, wx)), wy),
           agx_fadd_to(b, out, agx_neg(wx), wy));
+}
+
+TEST_F(Optimizer, FloatConversion)
+{
+   CASE32(
+      {
+         agx_index cvt = agx_temp(b->shader, AGX_SIZE_32);
+         agx_fmov_to(b, cvt, hx);
+         agx_fadd_to(b, out, cvt, wy);
+      },
+      { agx_fadd_to(b, out, hx, wy); });
+
+   CASE16(
+      {
+         agx_index sum = agx_temp(b->shader, AGX_SIZE_32);
+         agx_fadd_to(b, sum, wx, wy);
+         agx_fmov_to(b, out, sum);
+      },
+      { agx_fadd_to(b, out, wx, wy); });
 }
 
 TEST_F(Optimizer, FusedFABSNEG)
@@ -181,4 +182,15 @@ TEST_F(Optimizer, SkipPreloads)
       agx_index preload = agx_preload(b, agx_register(0, AGX_SIZE_32));
       agx_xor_to(b, out, preload, wy);
    });
+}
+
+TEST_F(Optimizer, NoConversionsOn16BitALU)
+{
+   NEGCASE16({
+      agx_index cvt = agx_temp(b->shader, AGX_SIZE_16);
+      agx_fmov_to(b, cvt, wx);
+      agx_fadd_to(b, out, cvt, hy);
+   });
+
+   NEGCASE32(agx_fmov_to(b, out, agx_fadd(b, hx, hy)));
 }

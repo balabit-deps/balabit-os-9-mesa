@@ -1,26 +1,8 @@
 /*
- * Copyright (C) 2021 Alyssa Rosenzweig
- * Copyright (C) 2020-2021 Collabora, Ltd.
- * Copyright (C) 2014 Broadcom
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright 2021 Alyssa Rosenzweig
+ * Copyright 2020-2021 Collabora, Ltd.
+ * Copyright 2014 Broadcom
+ * SPDX-License-Identifier: MIT
  */
 
 #include "asahi/compiler/agx_compile.h"
@@ -45,7 +27,8 @@ agx_blitter_save(struct agx_context *ctx, struct blitter_context *blitter,
    util_blitter_save_blend(blitter, ctx->blend);
    util_blitter_save_depth_stencil_alpha(blitter, ctx->zs);
    util_blitter_save_stencil_ref(blitter, &ctx->stencil_ref);
-   util_blitter_save_so_targets(blitter, 0, NULL);
+   util_blitter_save_so_targets(blitter, ctx->streamout.num_targets,
+                                ctx->streamout.targets);
    util_blitter_save_sample_mask(blitter, ctx->sample_mask, 0);
 
    util_blitter_save_framebuffer(blitter, &ctx->framebuffer);

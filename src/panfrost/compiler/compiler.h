@@ -79,8 +79,10 @@ bi_apply_swizzle(uint32_t value, enum bi_swizzle swz)
    const uint16_t *h = (const uint16_t *)&value;
    const uint8_t *b = (const uint8_t *)&value;
 
-#define H(h0, h1)         (h[h0] | (h[h1] << 16))
-#define B(b0, b1, b2, b3) (b[b0] | (b[b1] << 8) | (b[b2] << 16) | (b[b3] << 24))
+#define H(h0, h1) (h[h0] | ((uint32_t)h[h1] << 16))
+#define B(b0, b1, b2, b3)                                                      \
+   (b[b0] | ((uint32_t)b[b1] << 8) | ((uint32_t)b[b2] << 16) |                 \
+    ((uint32_t)b[b3] << 24))
 
    switch (swz) {
    case BI_SWIZZLE_H00:
@@ -803,7 +805,6 @@ bi_block_add_successor(bi_block *block, bi_block *successor)
 struct bi_shader_info {
    struct panfrost_ubo_push *push;
    struct bifrost_shader_info *bifrost;
-   struct panfrost_sysvals *sysvals;
    unsigned tls_size;
    unsigned work_reg_count;
    unsigned push_offset;
@@ -827,7 +828,6 @@ typedef struct {
    struct bi_shader_info info;
    gl_shader_stage stage;
    struct list_head blocks; /* list of bi_block */
-   struct hash_table_u64 *sysval_to_id;
    uint32_t quirks;
    unsigned arch;
    enum bi_idvs_mode idvs;

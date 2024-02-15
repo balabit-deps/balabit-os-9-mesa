@@ -10,6 +10,8 @@
 
 #include "vn_device.h"
 
+#include "util/disk_cache.h"
+#include "util/hex.h"
 #include "venus-protocol/vn_protocol_driver_device.h"
 
 #include "vn_android.h"
@@ -29,6 +31,9 @@ vn_queue_fini(struct vn_queue *queue)
    }
    if (queue->sync_fence != VK_NULL_HANDLE) {
       vn_DestroyFence(dev_handle, queue->sync_fence, NULL);
+   }
+   if (queue->sparse_semaphore != VK_NULL_HANDLE) {
+      vn_DestroySemaphore(dev_handle, queue->sparse_semaphore, NULL);
    }
    vn_object_base_fini(&queue->base);
 }
@@ -162,6 +167,54 @@ vn_device_queue_family_fini(struct vn_device *dev)
    vk_free(&dev->base.base.alloc, dev->queue_families);
 }
 
+static VkResult
+vn_device_memory_report_init(struct vn_device *dev,
+                             const VkDeviceCreateInfo *create_info)
+{
+   const struct vk_features *app_feats = &dev->base.base.enabled_features;
+   if (!app_feats->deviceMemoryReport)
+      return VK_SUCCESS;
+
+   uint32_t count = 0;
+   vk_foreach_struct_const(pnext, create_info->pNext) {
+      if (pnext->sType ==
+          VK_STRUCTURE_TYPE_DEVICE_DEVICE_MEMORY_REPORT_CREATE_INFO_EXT)
+         count++;
+   }
+
+   struct vn_device_memory_report *mem_reports = NULL;
+   if (count) {
+      mem_reports =
+         vk_alloc(&dev->base.base.alloc, sizeof(*mem_reports) * count,
+                  VN_DEFAULT_ALIGN, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+      if (!mem_reports)
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+   }
+
+   count = 0;
+   vk_foreach_struct_const(pnext, create_info->pNext) {
+      if (pnext->sType ==
+          VK_STRUCTURE_TYPE_DEVICE_DEVICE_MEMORY_REPORT_CREATE_INFO_EXT) {
+         const struct VkDeviceDeviceMemoryReportCreateInfoEXT *report =
+            (void *)pnext;
+         mem_reports[count].callback = report->pfnUserCallback;
+         mem_reports[count].data = report->pUserData;
+         count++;
+      }
+   }
+
+   dev->memory_report_count = count;
+   dev->memory_reports = mem_reports;
+
+   return VK_SUCCESS;
+}
+
+static inline void
+vn_device_memory_report_fini(struct vn_device *dev)
+{
+   vk_free(&dev->base.base.alloc, dev->memory_reports);
+}
+
 static bool
 find_extension_names(const char *const *exts,
                      uint32_t ext_count,
@@ -252,9 +305,9 @@ vn_device_fix_create_info(const struct vn_device *dev,
       }
 
       if (app_exts->ANDROID_native_buffer) {
-         if (!app_exts->KHR_external_fence_fd &&
-             (physical_dev->renderer_sync_fd_fence_features &
-              VK_EXTERNAL_FENCE_FEATURE_EXPORTABLE_BIT)) {
+         /* see vn_QueueSignalReleaseImageANDROID */
+         if (!app_exts->KHR_external_fence_fd) {
+            assert(physical_dev->renderer_sync_fd.fence_exportable);
             extra_exts[extra_count++] =
                VK_KHR_EXTERNAL_FENCE_FD_EXTENSION_NAME;
          }
@@ -270,8 +323,8 @@ vn_device_fix_create_info(const struct vn_device *dev,
 
    if (app_exts->KHR_external_memory_fd ||
        app_exts->EXT_external_memory_dma_buf || has_wsi) {
-      switch (physical_dev->external_memory.renderer_handle_type) {
-      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT:
+      if (physical_dev->external_memory.renderer_handle_type ==
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
          if (!app_exts->EXT_external_memory_dma_buf) {
             extra_exts[extra_count++] =
                VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME;
@@ -280,28 +333,18 @@ vn_device_fix_create_info(const struct vn_device *dev,
             extra_exts[extra_count++] =
                VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
          }
-         break;
-      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT:
-         if (app_exts->EXT_external_memory_dma_buf) {
-            block_exts[block_count++] =
-               VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME;
-         }
-         if (!app_exts->KHR_external_memory_fd) {
-            extra_exts[extra_count++] =
-               VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
-         }
-         break;
-      default:
-         assert(!physical_dev->instance->renderer->info.has_dma_buf_import);
-         break;
       }
    }
 
    /* see vn_queue_submission_count_batch_semaphores */
-   if (!app_exts->KHR_external_semaphore_fd &&
-       (physical_dev->renderer_sync_fd_semaphore_features &
-        VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT)) {
+   if (!app_exts->KHR_external_semaphore_fd && has_wsi) {
+      assert(physical_dev->renderer_sync_fd.semaphore_importable);
       extra_exts[extra_count++] = VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME;
+   }
+
+   if (app_exts->EXT_device_memory_report) {
+      /* see vn_physical_device_get_native_extensions */
+      block_exts[block_count++] = VK_EXT_DEVICE_MEMORY_REPORT_EXTENSION_NAME;
    }
 
    if (app_exts->EXT_physical_device_drm) {
@@ -346,7 +389,8 @@ vn_device_feedback_pool_init(struct vn_device *dev)
    static const uint32_t pool_size = 4096;
    const VkAllocationCallbacks *alloc = &dev->base.base.alloc;
 
-   if (VN_PERF(NO_EVENT_FEEDBACK) && VN_PERF(NO_FENCE_FEEDBACK))
+   if (VN_PERF(NO_EVENT_FEEDBACK) && VN_PERF(NO_FENCE_FEEDBACK) &&
+       VN_PERF(NO_TIMELINE_SEM_FEEDBACK))
       return VK_SUCCESS;
 
    return vn_feedback_pool_init(dev, &dev->feedback_pool, pool_size, alloc);
@@ -355,10 +399,46 @@ vn_device_feedback_pool_init(struct vn_device *dev)
 static inline void
 vn_device_feedback_pool_fini(struct vn_device *dev)
 {
-   if (VN_PERF(NO_EVENT_FEEDBACK) && VN_PERF(NO_FENCE_FEEDBACK))
+   if (VN_PERF(NO_EVENT_FEEDBACK) && VN_PERF(NO_FENCE_FEEDBACK) &&
+       VN_PERF(NO_TIMELINE_SEM_FEEDBACK))
       return;
 
    vn_feedback_pool_fini(&dev->feedback_pool);
+}
+
+static void
+vn_device_update_shader_cache_id(struct vn_device *dev)
+{
+   /* venus utilizes the host side shader cache.
+    * This is a WA to generate shader cache files containing headers
+    * with a unique cache id that will change based on host driver
+    * identifiers. This allows fossilize replay to detect if the host
+    * side shader cach is no longer up to date.
+    * The shader cache is destroyed after creating the necessary files
+    * and not utilized by venus.
+    */
+#if !defined(ANDROID) && defined(ENABLE_SHADER_CACHE)
+   const VkPhysicalDeviceProperties *vulkan_1_0_props =
+      &dev->physical_device->properties.vulkan_1_0;
+
+   char uuid[VK_UUID_SIZE * 2 + 1];
+   mesa_bytes_to_hex(uuid, vulkan_1_0_props->pipelineCacheUUID, VK_UUID_SIZE);
+
+   struct disk_cache *cache = disk_cache_create("venus", uuid, 0);
+   if (!cache)
+      return;
+
+   /* The entry header is what contains the cache id / timestamp so we
+    * need to create a fake entry.
+    */
+   uint8_t key[20];
+   char data[] = "Fake Shader";
+
+   disk_cache_compute_key(cache, data, sizeof(data), key);
+   disk_cache_put(cache, key, data, sizeof(data), NULL);
+
+   disk_cache_destroy(cache);
+#endif
 }
 
 static VkResult
@@ -393,9 +473,13 @@ vn_device_init(struct vn_device *dev,
    if (result != VK_SUCCESS)
       return result;
 
+   result = vn_device_memory_report_init(dev, create_info);
+   if (result != VK_SUCCESS)
+      goto out_destroy_device;
+
    if (!vn_device_queue_family_init(dev, create_info)) {
       result = VK_ERROR_OUT_OF_HOST_MEMORY;
-      goto out_destroy_device;
+      goto out_memory_report_fini;
    }
 
    for (uint32_t i = 0; i < ARRAY_SIZE(dev->memory_pools); i++) {
@@ -403,13 +487,9 @@ vn_device_init(struct vn_device *dev,
       mtx_init(&pool->mutex, mtx_plain);
    }
 
-   result = vn_buffer_cache_init(dev);
-   if (result != VK_SUCCESS)
-      goto out_memory_pool_fini;
-
    result = vn_device_feedback_pool_init(dev);
    if (result != VK_SUCCESS)
-      goto out_buffer_cache_fini;
+      goto out_memory_pool_fini;
 
    result = vn_feedback_cmd_pools_init(dev);
    if (result != VK_SUCCESS)
@@ -419,6 +499,13 @@ vn_device_init(struct vn_device *dev,
    if (result != VK_SUCCESS)
       goto out_cmd_pools_fini;
 
+   vn_buffer_cache_init(dev);
+
+   /* This is a WA to allow fossilize replay to detect if the host side shader
+    * cache is no longer up to date.
+    */
+   vn_device_update_shader_cache_id(dev);
+
    return VK_SUCCESS;
 
 out_cmd_pools_fini:
@@ -427,14 +514,14 @@ out_cmd_pools_fini:
 out_feedback_pool_fini:
    vn_device_feedback_pool_fini(dev);
 
-out_buffer_cache_fini:
-   vn_buffer_cache_fini(dev);
-
 out_memory_pool_fini:
    for (uint32_t i = 0; i < ARRAY_SIZE(dev->memory_pools); i++)
       vn_device_memory_pool_fini(dev, i);
 
    vn_device_queue_family_fini(dev);
+
+out_memory_report_fini:
+   vn_device_memory_report_fini(dev);
 
 out_destroy_device:
    vn_call_vkDestroyDevice(instance, dev_handle, NULL);
@@ -481,6 +568,11 @@ vn_CreateDevice(VkPhysicalDevice physicalDevice,
       return vn_error(instance, result);
    }
 
+   if (VN_DEBUG(LOG_CTX_INFO)) {
+      vn_log(instance, "%s", physical_dev->properties.vulkan_1_0.deviceName);
+      vn_log(instance, "%s", physical_dev->properties.vulkan_1_2.driverInfo);
+   }
+
    *pDevice = vn_device_to_handle(dev);
 
    return VK_SUCCESS;
@@ -497,6 +589,8 @@ vn_DestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator)
    if (!dev)
       return;
 
+   vn_buffer_cache_fini(dev);
+
    for (uint32_t i = 0; i < dev->queue_count; i++)
       vn_queue_fini(&dev->queues[i]);
 
@@ -504,12 +598,12 @@ vn_DestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator)
 
    vn_device_feedback_pool_fini(dev);
 
-   vn_buffer_cache_fini(dev);
-
    for (uint32_t i = 0; i < ARRAY_SIZE(dev->memory_pools); i++)
       vn_device_memory_pool_fini(dev, i);
 
    vn_device_queue_family_fini(dev);
+
+   vn_device_memory_report_fini(dev);
 
    /* We must emit vkDestroyDevice before freeing dev->queues.  Otherwise,
     * another thread might reuse their object ids while they still refer to

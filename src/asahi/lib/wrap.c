@@ -1,24 +1,6 @@
 /*
- * Copyright (C) 2021-2022 Alyssa Rosenzweig <alyssa@rosenzweig.io>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright 2021-2022 Alyssa Rosenzweig
+ * SPDX-License-Identifier: MIT
  */
 #include <assert.h>
 #include <dlfcn.h>
@@ -31,10 +13,10 @@
 #include <mach/mach.h>
 
 #include "util/compiler.h"
+#include "util/u_hexdump.h"
+#include "agx_iokit.h"
 #include "decode.h"
 #include "dyld_interpose.h"
-#include "hexdump.h"
-#include "io.h"
 #include "util.h"
 
 /*
@@ -155,7 +137,7 @@ wrap_Method(mach_port_t connection, uint32_t selector, const uint64_t *input,
 
       if (inputStructCnt) {
          printf(", struct:\n");
-         hexdump(stdout, inputStruct, inputStructCnt, true);
+         u_hexdump(stdout, inputStruct, inputStructCnt, true);
       } else {
          printf("\n");
       }
@@ -259,12 +241,12 @@ wrap_Method(mach_port_t connection, uint32_t selector, const uint64_t *input,
 
       if (outputStructCntP) {
          printf(" struct\n");
-         hexdump(stdout, outputStruct, *outputStructCntP, true);
+         u_hexdump(stdout, outputStruct, *outputStructCntP, true);
 
          if (selector == 2) {
             /* Dump linked buffer as well */
             void **o = outputStruct;
-            hexdump(stdout, *o, 64, true);
+            u_hexdump(stdout, *o, 64, true);
          }
       }
 
@@ -297,7 +279,7 @@ wrap_AsyncMethod(mach_port_t connection, uint32_t selector,
 
    if (inputStructCnt) {
       printf(", struct:\n");
-      hexdump(stdout, inputStruct, inputStructCnt, true);
+      u_hexdump(stdout, inputStruct, inputStructCnt, true);
    } else {
       printf("\n");
    }
@@ -325,12 +307,12 @@ wrap_AsyncMethod(mach_port_t connection, uint32_t selector,
 
    if (outputStructCntP) {
       printf(" struct\n");
-      hexdump(stdout, outputStruct, *outputStructCntP, true);
+      u_hexdump(stdout, outputStruct, *outputStructCntP, true);
 
       if (selector == 2) {
          /* Dump linked buffer as well */
          void **o = outputStruct;
-         hexdump(stdout, *o, 64, true);
+         u_hexdump(stdout, *o, 64, true);
       }
    }
 

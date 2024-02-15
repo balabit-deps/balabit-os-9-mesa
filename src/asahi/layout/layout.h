@@ -1,24 +1,6 @@
 /*
- * Copyright (C) 2022 Alyssa Rosenzweig
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright 2022 Alyssa Rosenzweig
+ * SPDX-License-Identifier: MIT
  *
  */
 
@@ -78,6 +60,12 @@ struct ail_layout {
 
    /** Number of miplevels. 1 if no mipmapping is used. */
    uint8_t levels;
+
+   /** Should this image be mipmapped along the Z-axis in addition to the X- and
+    * Y-axes? This should be set for API-level 3D images, but not 2D arrays or
+    * cubes.
+    */
+   bool mipmapped_z;
 
    /** Tiling mode used */
    enum ail_tiling tiling;
@@ -200,6 +188,28 @@ static inline bool
 ail_is_compressed(struct ail_layout *layout)
 {
    return layout->tiling == AIL_TILING_TWIDDLED_COMPRESSED;
+}
+
+static inline unsigned
+ail_effective_width_sa(unsigned width_px, unsigned sample_count_sa)
+{
+   return width_px * (sample_count_sa == 4 ? 2 : 1);
+}
+
+static inline unsigned
+ail_effective_height_sa(unsigned height_px, unsigned sample_count_sa)
+{
+   return height_px * (sample_count_sa >= 2 ? 2 : 1);
+}
+
+static inline bool
+ail_can_compress(unsigned w_px, unsigned h_px, unsigned sample_count_sa)
+{
+   assert(sample_count_sa == 1 || sample_count_sa == 2 || sample_count_sa == 4);
+
+   /* Small textures cannot be compressed */
+   return ail_effective_width_sa(w_px, sample_count_sa) >= 16 &&
+          ail_effective_height_sa(h_px, sample_count_sa) >= 16;
 }
 
 void ail_make_miptree(struct ail_layout *layout);
