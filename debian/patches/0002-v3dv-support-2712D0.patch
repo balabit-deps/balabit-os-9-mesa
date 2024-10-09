@@ -1,0 +1,239 @@
+From 9ebb1a0d80a29ae972ecd1de4736afe7cb1b4465 Mon Sep 17 00:00:00 2001
+From: Iago Toral Quiroga <itoral@igalia.com>
+Date: Thu, 23 Nov 2023 11:33:57 +0100
+Subject: [PATCH 2/3] v3dv: support 2712D0
+
+2712D0 has V3D 7.1.10 which included draw index and
+base vertex in the shader state record packet, shuffling
+the locations of most of its fields. Handle this at run
+time by emitting the appropriate packet based on the
+V3D version since our current versioning framework doesn't
+support changes based on revision number alone.
+
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/29189>
+(cherry picked from commit b545e78f12b02069fa363a4a7ef749a996ea3c4b)
+---
+ src/broadcom/vulkan/v3dvx_cmd_buffer.c | 96 +++++++++++++++++---------
+ src/broadcom/vulkan/v3dvx_pipeline.c   | 75 +++++++++++++++++---
+ 2 files changed, 130 insertions(+), 41 deletions(-)
+
+diff --git a/src/broadcom/vulkan/v3dvx_cmd_buffer.c b/src/broadcom/vulkan/v3dvx_cmd_buffer.c
+index 65b18ae639c..09fae0307bc 100644
+--- a/src/broadcom/vulkan/v3dvx_cmd_buffer.c
++++ b/src/broadcom/vulkan/v3dvx_cmd_buffer.c
+@@ -2333,6 +2333,13 @@ v3dX(cmd_buffer_emit_gl_shader_state)(struct v3dv_cmd_buffer *cmd_buffer)
+ 
+    uint32_t shader_state_record_length =
+       cl_packet_length(GL_SHADER_STATE_RECORD);
++#if V3D_VERSION >= 71
++   if (v3d_device_has_draw_index(&pipeline->device->devinfo)) {
++      shader_state_record_length =
++         cl_packet_length(GL_SHADER_STATE_RECORD_DRAW_INDEX);
++   }
++#endif
++
+    if (pipeline->has_gs) {
+       shader_state_record_length +=
+          cl_packet_length(GEOMETRY_SHADER_STATE_RECORD) +
+@@ -2380,39 +2387,64 @@ v3dX(cmd_buffer_emit_gl_shader_state)(struct v3dv_cmd_buffer *cmd_buffer)
+       pipeline->device->default_attribute_float;
+ #endif
+ 
+-   cl_emit_with_prepacked(&job->indirect, GL_SHADER_STATE_RECORD,
+-                          pipeline->shader_state_record, shader) {
+-
+-      /* FIXME: we are setting this values here and during the
+-       * prepacking. This is because both cl_emit_with_prepacked and v3dvx_pack
+-       * asserts for minimum values of these. It would be good to get
+-       * v3dvx_pack to assert on the final value if possible
+-       */
+-      shader.min_coord_shader_input_segments_required_in_play =
+-         pipeline->vpm_cfg_bin.As;
+-      shader.min_vertex_shader_input_segments_required_in_play =
+-         pipeline->vpm_cfg.As;
+-
+-      shader.coordinate_shader_code_address =
+-         v3dv_cl_address(assembly_bo, vs_bin_variant->assembly_offset);
+-      shader.vertex_shader_code_address =
+-         v3dv_cl_address(assembly_bo, vs_variant->assembly_offset);
+-      shader.fragment_shader_code_address =
+-         v3dv_cl_address(assembly_bo, fs_variant->assembly_offset);
+-
+-      shader.coordinate_shader_uniforms_address = cmd_buffer->state.uniforms.vs_bin;
+-      shader.vertex_shader_uniforms_address = cmd_buffer->state.uniforms.vs;
+-      shader.fragment_shader_uniforms_address = cmd_buffer->state.uniforms.fs;
+-
+-#if V3D_VERSION == 42
+-      shader.address_of_default_attribute_values =
+-         v3dv_cl_address(default_attribute_values, 0);
++#if V3D_VERSION >= 71
++   if (v3d_device_has_draw_index(&pipeline->device->devinfo)) {
++      cl_emit_with_prepacked(&job->indirect, GL_SHADER_STATE_RECORD_DRAW_INDEX,
++                             pipeline->shader_state_record, shader) {
++         shader.min_coord_shader_input_segments_required_in_play =
++            pipeline->vpm_cfg_bin.As;
++         shader.min_vertex_shader_input_segments_required_in_play =
++            pipeline->vpm_cfg.As;
++         shader.coordinate_shader_code_address =
++            v3dv_cl_address(assembly_bo, vs_bin_variant->assembly_offset);
++         shader.vertex_shader_code_address =
++            v3dv_cl_address(assembly_bo, vs_variant->assembly_offset);
++         shader.fragment_shader_code_address =
++            v3dv_cl_address(assembly_bo, fs_variant->assembly_offset);
++         shader.coordinate_shader_uniforms_address = cmd_buffer->state.uniforms.vs_bin;
++         shader.vertex_shader_uniforms_address = cmd_buffer->state.uniforms.vs;
++         shader.fragment_shader_uniforms_address = cmd_buffer->state.uniforms.fs;
++         shader.any_shader_reads_hardware_written_primitive_id =
++            (pipeline->has_gs && prog_data_gs->uses_pid) || prog_data_fs->uses_pid;
++         shader.insert_primitive_id_as_first_varying_to_fragment_shader =
++            !pipeline->has_gs && prog_data_fs->uses_pid;
++      }
++   } else
+ #endif
+-
+-      shader.any_shader_reads_hardware_written_primitive_id =
+-         (pipeline->has_gs && prog_data_gs->uses_pid) || prog_data_fs->uses_pid;
+-      shader.insert_primitive_id_as_first_varying_to_fragment_shader =
+-         !pipeline->has_gs && prog_data_fs->uses_pid;
++   {
++      cl_emit_with_prepacked(&job->indirect, GL_SHADER_STATE_RECORD,
++                             pipeline->shader_state_record, shader) {
++         /* FIXME: we are setting this values here and during the
++          * prepacking. This is because both cl_emit_with_prepacked and v3dvx_pack
++          * asserts for minimum values of these. It would be good to get
++          * v3dvx_pack to assert on the final value if possible
++          */
++         shader.min_coord_shader_input_segments_required_in_play =
++            pipeline->vpm_cfg_bin.As;
++         shader.min_vertex_shader_input_segments_required_in_play =
++            pipeline->vpm_cfg.As;
++
++         shader.coordinate_shader_code_address =
++            v3dv_cl_address(assembly_bo, vs_bin_variant->assembly_offset);
++         shader.vertex_shader_code_address =
++            v3dv_cl_address(assembly_bo, vs_variant->assembly_offset);
++         shader.fragment_shader_code_address =
++            v3dv_cl_address(assembly_bo, fs_variant->assembly_offset);
++
++         shader.coordinate_shader_uniforms_address = cmd_buffer->state.uniforms.vs_bin;
++         shader.vertex_shader_uniforms_address = cmd_buffer->state.uniforms.vs;
++         shader.fragment_shader_uniforms_address = cmd_buffer->state.uniforms.fs;
++
++   #if V3D_VERSION == 42
++         shader.address_of_default_attribute_values =
++            v3dv_cl_address(default_attribute_values, 0);
++   #endif
++
++         shader.any_shader_reads_hardware_written_primitive_id =
++            (pipeline->has_gs && prog_data_gs->uses_pid) || prog_data_fs->uses_pid;
++         shader.insert_primitive_id_as_first_varying_to_fragment_shader =
++            !pipeline->has_gs && prog_data_fs->uses_pid;
++      }
+    }
+ 
+    /* Upload vertex element attributes (SHADER_STATE_ATTRIBUTE_RECORD) */
+diff --git a/src/broadcom/vulkan/v3dvx_pipeline.c b/src/broadcom/vulkan/v3dvx_pipeline.c
+index 478fb9a0fa1..e515286847b 100644
+--- a/src/broadcom/vulkan/v3dvx_pipeline.c
++++ b/src/broadcom/vulkan/v3dvx_pipeline.c
+@@ -399,6 +399,10 @@ v3dX(pipeline_pack_state)(struct v3dv_pipeline *pipeline,
+ static void
+ pack_shader_state_record(struct v3dv_pipeline *pipeline)
+ {
++   /* To siplify the code we ignore here GL_SHADER_STATE_RECORD_DRAW_INDEX
++    * used with 2712D0, since we know that has the same size as the regular
++    * version.
++    */
+    assert(sizeof(pipeline->shader_state_record) >=
+           cl_packet_length(GL_SHADER_STATE_RECORD));
+ 
+@@ -411,6 +415,14 @@ pack_shader_state_record(struct v3dv_pipeline *pipeline)
+    struct v3d_vs_prog_data *prog_data_vs_bin =
+       pipeline->shared_data->variants[BROADCOM_SHADER_VERTEX_BIN]->prog_data.vs;
+ 
++   bool point_size_in_shaded_vertex_data;
++   if (!pipeline->has_gs) {
++      point_size_in_shaded_vertex_data = pipeline->topology == MESA_PRIM_POINTS;
++   } else {
++      struct v3d_gs_prog_data *prog_data_gs =
++         pipeline->shared_data->variants[BROADCOM_SHADER_GEOMETRY]->prog_data.gs;
++         point_size_in_shaded_vertex_data = prog_data_gs->writes_psiz;
++   }
+ 
+    /* Note: we are not packing addresses, as we need the job (see
+     * cl_pack_emit_reloc). Additionally uniforms can't be filled up at this
+@@ -418,17 +430,62 @@ pack_shader_state_record(struct v3dv_pipeline *pipeline)
+     * pipeline (like viewport), . Would need to be filled later, so we are
+     * doing a partial prepacking.
+     */
++#if V3D_VERSION >= 71
++   /* 2712D0 (V3D 7.1.10) has included draw index and base vertex, shuffling all
++    * the fields in the packet. Since the versioning framework doesn't handle
++    * revision numbers, the XML has a different shader state record packet
++    * including the new fields and we device at run time which packet we need
++    * to emit.
++    */
++   if (v3d_device_has_draw_index(&pipeline->device->devinfo)) {
++      v3dvx_pack(pipeline->shader_state_record, GL_SHADER_STATE_RECORD_DRAW_INDEX, shader) {
++         shader.enable_clipping = true;
++         shader.point_size_in_shaded_vertex_data = point_size_in_shaded_vertex_data;
++         shader.fragment_shader_does_z_writes = prog_data_fs->writes_z;
++         shader.turn_off_early_z_test = prog_data_fs->disable_ez;
++         shader.fragment_shader_uses_real_pixel_centre_w_in_addition_to_centroid_w2 =
++            prog_data_fs->uses_center_w;
++         shader.enable_sample_rate_shading =
++            pipeline->sample_rate_shading ||
++            (pipeline->msaa && prog_data_fs->force_per_sample_msaa);
++         shader.any_shader_reads_hardware_written_primitive_id = false;
++         shader.do_scoreboard_wait_on_first_thread_switch =
++            prog_data_fs->lock_scoreboard_on_first_thrsw;
++         shader.disable_implicit_point_line_varyings =
++            !prog_data_fs->uses_implicit_point_line_varyings;
++         shader.number_of_varyings_in_fragment_shader = prog_data_fs->num_inputs;
++         shader.coordinate_shader_input_vpm_segment_size = prog_data_vs_bin->vpm_input_size;
++         shader.vertex_shader_input_vpm_segment_size = prog_data_vs->vpm_input_size;
++         shader.coordinate_shader_output_vpm_segment_size = prog_data_vs_bin->vpm_output_size;
++         shader.vertex_shader_output_vpm_segment_size = prog_data_vs->vpm_output_size;
++         shader.min_coord_shader_input_segments_required_in_play =
++            pipeline->vpm_cfg_bin.As;
++         shader.min_vertex_shader_input_segments_required_in_play =
++            pipeline->vpm_cfg.As;
++         shader.min_coord_shader_output_segments_required_in_play_in_addition_to_vcm_cache_size =
++            pipeline->vpm_cfg_bin.Ve;
++         shader.min_vertex_shader_output_segments_required_in_play_in_addition_to_vcm_cache_size =
++            pipeline->vpm_cfg.Ve;
++         shader.coordinate_shader_4_way_threadable = prog_data_vs_bin->base.threads == 4;
++         shader.vertex_shader_4_way_threadable = prog_data_vs->base.threads == 4;
++         shader.fragment_shader_4_way_threadable = prog_data_fs->base.threads == 4;
++         shader.coordinate_shader_start_in_final_thread_section = prog_data_vs_bin->base.single_seg;
++         shader.vertex_shader_start_in_final_thread_section = prog_data_vs->base.single_seg;
++         shader.fragment_shader_start_in_final_thread_section = prog_data_fs->base.single_seg;
++         shader.vertex_id_read_by_coordinate_shader = prog_data_vs_bin->uses_vid;
++         shader.base_instance_id_read_by_coordinate_shader = prog_data_vs_bin->uses_biid;
++         shader.instance_id_read_by_coordinate_shader = prog_data_vs_bin->uses_iid;
++         shader.vertex_id_read_by_vertex_shader = prog_data_vs->uses_vid;
++         shader.base_instance_id_read_by_vertex_shader = prog_data_vs->uses_biid;
++         shader.instance_id_read_by_vertex_shader = prog_data_vs->uses_iid;
++      }
++      return;
++   }
++#endif
++
+    v3dvx_pack(pipeline->shader_state_record, GL_SHADER_STATE_RECORD, shader) {
+       shader.enable_clipping = true;
+-
+-      if (!pipeline->has_gs) {
+-         shader.point_size_in_shaded_vertex_data =
+-            pipeline->topology == MESA_PRIM_POINTS;
+-      } else {
+-         struct v3d_gs_prog_data *prog_data_gs =
+-            pipeline->shared_data->variants[BROADCOM_SHADER_GEOMETRY]->prog_data.gs;
+-         shader.point_size_in_shaded_vertex_data = prog_data_gs->writes_psiz;
+-      }
++      shader.point_size_in_shaded_vertex_data = point_size_in_shaded_vertex_data;
+ 
+       /* Must be set if the shader modifies Z, discards, or modifies
+        * the sample mask.  For any of these cases, the fragment
+-- 
+2.45.2
+

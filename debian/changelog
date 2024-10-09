@@ -1,3 +1,14 @@
+mesa (23.2.1-1ubuntu3.1~22.04.3) jammy; urgency=medium
+
+  [ Timo Aaltonen ]
+  * Add support for Pi 2712D0 stepping (LP: #2082072)
+
+  [ Alessandro Astone ]
+  * patches: Backport patch for green artifacting and GPU crash on
+    radeonsi with kernel >= 6.10 (LP: #2083538)
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 09 Oct 2024 17:47:27 +0300
+
 mesa (23.2.1-1ubuntu3.1~22.04.2) jammy; urgency=medium
 
   * patches: Revert a patch that caused GUI fail with OEM-6.1 kernel on

@@ -6,3 +6,8 @@ v3d-v3dv-support-for-HW-7.1.x.patch
 radeonsi-prefix-function-with-si_-to-prevent-name-co.patch
 use_common_clear_texture.patch
 Revert-intel-reduce-minimum-memory-alignment-on-Gfx1.patch
+
+0001-v3d-support-2712D0.patch
+0002-v3dv-support-2712D0.patch
+0003-broadcom-cle-fix-up-shader-record-for-V3D-7.1.10-271.patch
+radeonsi-vcn-Add-decode-DPB-buffers-as-CS-dependency.patch

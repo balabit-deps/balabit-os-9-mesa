@@ -1,0 +1,395 @@
+From 749a450fbed450d5dffa08e8b2ac07f0497e810c Mon Sep 17 00:00:00 2001
+From: Iago Toral Quiroga <itoral@igalia.com>
+Date: Tue, 14 May 2024 10:24:07 +0200
+Subject: [PATCH 1/3] v3d: support 2712D0
+
+2710D0 has V3D 7.1.10 which included draw index and
+base vertex in the shader state record packet, shuffling
+the locations of most of its fields. Handle this at run
+time by emitting the appropriate packet based on the
+V3D version since our current versoning framework doesn't
+support changes based on revision number alone.
+
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/29189>
+(cherry picked from commit 1fc846dce396e2e0d1be23568e22ae2510df71bd)
+---
+ src/broadcom/common/v3d_device_info.h |   6 +
+ src/gallium/drivers/v3d/v3dx_draw.c   | 316 +++++++++++++++++---------
+ 2 files changed, 214 insertions(+), 108 deletions(-)
+
+--- a/src/broadcom/common/v3d_device_info.h
++++ b/src/broadcom/common/v3d_device_info.h
+@@ -52,4 +52,10 @@ typedef int (*v3d_ioctl_fun)(int fd, uns
+ bool
+ v3d_get_device_info(int fd, struct v3d_device_info* devinfo, v3d_ioctl_fun fun);
+ 
++static inline bool
++v3d_device_has_draw_index(struct v3d_device_info *devinfo)
++{
++        return devinfo->ver > 71 || (devinfo->ver == 71 && devinfo->rev >= 10);
++}
++
+ #endif
+--- a/src/gallium/drivers/v3d/v3dx_draw.c
++++ b/src/gallium/drivers/v3d/v3dx_draw.c
+@@ -503,122 +503,100 @@ v3d_emit_tes_gs_shader_params(struct v3d
+ #endif
+ 
+ static void
+-v3d_emit_gl_shader_state(struct v3d_context *v3d,
+-                         const struct pipe_draw_info *info)
++emit_shader_state_record(struct v3d_context *v3d,
++                         struct v3d_job *job,
++                         const struct pipe_draw_info *info,
++                         struct v3d_vertex_stateobj *vtx,
++                         struct v3d_cl_reloc cs_uniforms,
++                         struct v3d_cl_reloc vs_uniforms,
++                         struct v3d_cl_reloc fs_uniforms,
++                         struct vpm_config *vpm_cfg_bin,
++                         struct vpm_config *vpm_cfg)
+ {
+-        struct v3d_job *job = v3d->job;
+-        /* V3D_DIRTY_VTXSTATE */
+-        struct v3d_vertex_stateobj *vtx = v3d->vtx;
+-        /* V3D_DIRTY_VTXBUF */
+-        struct v3d_vertexbuf_stateobj *vertexbuf = &v3d->vertexbuf;
+-
+-        /* Upload the uniforms to the indirect CL first */
+-        struct v3d_cl_reloc fs_uniforms =
+-                v3d_write_uniforms(v3d, job, v3d->prog.fs,
+-                                   PIPE_SHADER_FRAGMENT);
+-
+-        struct v3d_cl_reloc gs_uniforms = { NULL, 0 };
+-        struct v3d_cl_reloc gs_bin_uniforms = { NULL, 0 };
+-        if (v3d->prog.gs) {
+-                gs_uniforms = v3d_write_uniforms(v3d, job, v3d->prog.gs,
+-                                                 PIPE_SHADER_GEOMETRY);
+-        }
+-        if (v3d->prog.gs_bin) {
+-                gs_bin_uniforms = v3d_write_uniforms(v3d, job, v3d->prog.gs_bin,
+-                                                     PIPE_SHADER_GEOMETRY);
+-        }
+-
+-        struct v3d_cl_reloc vs_uniforms =
+-                v3d_write_uniforms(v3d, job, v3d->prog.vs,
+-                                   PIPE_SHADER_VERTEX);
+-        struct v3d_cl_reloc cs_uniforms =
+-                v3d_write_uniforms(v3d, job, v3d->prog.cs,
+-                                   PIPE_SHADER_VERTEX);
+-
+-        /* Update the cache dirty flag based on the shader progs data */
+-        job->tmu_dirty_rcl |= v3d->prog.cs->prog_data.vs->base.tmu_dirty_rcl;
+-        job->tmu_dirty_rcl |= v3d->prog.vs->prog_data.vs->base.tmu_dirty_rcl;
+-        if (v3d->prog.gs_bin) {
+-                job->tmu_dirty_rcl |=
+-                        v3d->prog.gs_bin->prog_data.gs->base.tmu_dirty_rcl;
+-        }
+-        if (v3d->prog.gs) {
+-                job->tmu_dirty_rcl |=
+-                        v3d->prog.gs->prog_data.gs->base.tmu_dirty_rcl;
+-        }
+-        job->tmu_dirty_rcl |= v3d->prog.fs->prog_data.fs->base.tmu_dirty_rcl;
+-
+-        uint32_t num_elements_to_emit = 0;
+-        for (int i = 0; i < vtx->num_elements; i++) {
+-                struct pipe_vertex_element *elem = &vtx->pipe[i];
+-                struct pipe_vertex_buffer *vb =
+-                        &vertexbuf->vb[elem->vertex_buffer_index];
+-                if (vb->buffer.resource)
+-                        num_elements_to_emit++;
+-        }
+-
+-        uint32_t shader_state_record_length =
+-                cl_packet_length(GL_SHADER_STATE_RECORD);
+-#if V3D_VERSION >= 41
+-        if (v3d->prog.gs) {
+-                shader_state_record_length +=
+-                        cl_packet_length(GEOMETRY_SHADER_STATE_RECORD) +
+-                        cl_packet_length(TESSELLATION_GEOMETRY_COMMON_PARAMS) +
+-                        2 * cl_packet_length(TESSELLATION_GEOMETRY_SHADER_PARAMS);
+-        }
+-#endif
+-
+-        /* See GFXH-930 workaround below */
+-        uint32_t shader_rec_offset =
+-                    v3d_cl_ensure_space(&job->indirect,
+-                                    shader_state_record_length +
+-                                    MAX2(num_elements_to_emit, 1) *
+-                                    cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD),
+-                                    32);
+-
+-        /* XXX perf: We should move most of the SHADER_STATE_RECORD setup to
+-         * compile time, so that we mostly just have to OR the VS and FS
+-         * records together at draw time.
++#if V3D_VERSION >= 71
++        /* 2712D0 (V3D 7.1.10) has included draw index and base vertex,
++         * shuffling all the fields in the packet. Since the versioning
++         * framework doesn't handle revision numbers, the XML has a
++         * different shader state record packet including the new fields
++         * and we decide at run time which packet we need to emit.
+          */
+-
+-        struct vpm_config vpm_cfg_bin, vpm_cfg;
+-
+-        assert(v3d->screen->devinfo.ver >= 41 || !v3d->prog.gs);
+-        v3d_compute_vpm_config(&v3d->screen->devinfo,
+-                               v3d->prog.cs->prog_data.vs,
+-                               v3d->prog.vs->prog_data.vs,
+-                               v3d->prog.gs ? v3d->prog.gs_bin->prog_data.gs : NULL,
+-                               v3d->prog.gs ? v3d->prog.gs->prog_data.gs : NULL,
+-                               &vpm_cfg_bin,
+-                               &vpm_cfg);
+-
+-        if (v3d->prog.gs) {
+-#if V3D_VERSION >= 41
+-                v3d_emit_gs_state_record(v3d->job,
+-                                         v3d->prog.gs_bin, gs_bin_uniforms,
+-                                         v3d->prog.gs, gs_uniforms);
+-
+-                struct v3d_gs_prog_data *gs = v3d->prog.gs->prog_data.gs;
+-                v3d_emit_tes_gs_common_params(v3d->job,
+-                                              gs->out_prim_type,
+-                                              gs->num_invocations);
+-
+-                /* Bin Tes/Gs params */
+-                v3d_emit_tes_gs_shader_params(v3d->job,
+-                                              vpm_cfg_bin.gs_width,
+-                                              vpm_cfg_bin.Gd,
+-                                              vpm_cfg_bin.Gv);
+-
+-                /* Render Tes/Gs params */
+-                v3d_emit_tes_gs_shader_params(v3d->job,
+-                                              vpm_cfg.gs_width,
+-                                              vpm_cfg.Gd,
+-                                              vpm_cfg.Gv);
+-#else
+-                unreachable("No GS support pre-4.1");
+-#endif
++        if (v3d_device_has_draw_index(&v3d->screen->devinfo)) {
++                cl_emit(&job->indirect, GL_SHADER_STATE_RECORD_DRAW_INDEX, shader) {
++                        shader.enable_clipping = true;
++                        shader.point_size_in_shaded_vertex_data =
++                                (info->mode == MESA_PRIM_POINTS &&
++                                 v3d->rasterizer->base.point_size_per_vertex);
++                        shader.fragment_shader_does_z_writes =
++                                v3d->prog.fs->prog_data.fs->writes_z;
++                        shader.turn_off_early_z_test =
++                                v3d->prog.fs->prog_data.fs->disable_ez;
++                        shader.fragment_shader_uses_real_pixel_centre_w_in_addition_to_centroid_w2 =
++                                v3d->prog.fs->prog_data.fs->uses_center_w;
++                        shader.any_shader_reads_hardware_written_primitive_id =
++                                (v3d->prog.gs && v3d->prog.gs->prog_data.gs->uses_pid) ||
++                                v3d->prog.fs->prog_data.fs->uses_pid;
++                        shader.insert_primitive_id_as_first_varying_to_fragment_shader =
++                                !v3d->prog.gs && v3d->prog.fs->prog_data.fs->uses_pid;
++                        shader.do_scoreboard_wait_on_first_thread_switch =
++                                v3d->prog.fs->prog_data.fs->lock_scoreboard_on_first_thrsw;
++                        shader.disable_implicit_point_line_varyings =
++                                !v3d->prog.fs->prog_data.fs->uses_implicit_point_line_varyings;
++                        shader.number_of_varyings_in_fragment_shader =
++                                v3d->prog.fs->prog_data.fs->num_inputs;
++                        shader.coordinate_shader_code_address =
++                                cl_address(v3d_resource(v3d->prog.cs->resource)->bo,
++                                           v3d->prog.cs->offset);
++                        shader.vertex_shader_code_address =
++                                cl_address(v3d_resource(v3d->prog.vs->resource)->bo,
++                                           v3d->prog.vs->offset);
++                        shader.fragment_shader_code_address =
++                                cl_address(v3d_resource(v3d->prog.fs->resource)->bo,
++                                           v3d->prog.fs->offset);
++                        shader.coordinate_shader_input_vpm_segment_size =
++                                v3d->prog.cs->prog_data.vs->vpm_input_size;
++                        shader.vertex_shader_input_vpm_segment_size =
++                                v3d->prog.vs->prog_data.vs->vpm_input_size;
++                        shader.coordinate_shader_output_vpm_segment_size =
++                                v3d->prog.cs->prog_data.vs->vpm_output_size;
++                        shader.vertex_shader_output_vpm_segment_size =
++                                v3d->prog.vs->prog_data.vs->vpm_output_size;
++                        shader.coordinate_shader_uniforms_address = cs_uniforms;
++                        shader.vertex_shader_uniforms_address = vs_uniforms;
++                        shader.fragment_shader_uniforms_address = fs_uniforms;
++                        shader.min_coord_shader_input_segments_required_in_play =
++                                vpm_cfg_bin->As;
++                        shader.min_vertex_shader_input_segments_required_in_play =
++                                vpm_cfg->As;
++                        shader.min_coord_shader_output_segments_required_in_play_in_addition_to_vcm_cache_size =
++                                vpm_cfg_bin->Ve;
++                        shader.min_vertex_shader_output_segments_required_in_play_in_addition_to_vcm_cache_size =
++                                vpm_cfg->Ve;
++                        shader.coordinate_shader_4_way_threadable =
++                                v3d->prog.cs->prog_data.vs->base.threads == 4;
++                        shader.vertex_shader_4_way_threadable =
++                                v3d->prog.vs->prog_data.vs->base.threads == 4;
++                        shader.fragment_shader_4_way_threadable =
++                                v3d->prog.fs->prog_data.fs->base.threads == 4;
++                        shader.coordinate_shader_start_in_final_thread_section =
++                                v3d->prog.cs->prog_data.vs->base.single_seg;
++                        shader.vertex_shader_start_in_final_thread_section =
++                                v3d->prog.vs->prog_data.vs->base.single_seg;
++                        shader.fragment_shader_start_in_final_thread_section =
++                                v3d->prog.fs->prog_data.fs->base.single_seg;
++                        shader.vertex_id_read_by_coordinate_shader =
++                                v3d->prog.cs->prog_data.vs->uses_vid;
++                        shader.instance_id_read_by_coordinate_shader =
++                                v3d->prog.cs->prog_data.vs->uses_iid;
++                        shader.vertex_id_read_by_vertex_shader =
++                                v3d->prog.vs->prog_data.vs->uses_vid;
++                        shader.instance_id_read_by_vertex_shader =
++                                v3d->prog.vs->prog_data.vs->uses_iid;
++                }
++                return;
+         }
++#endif
+ 
++        assert(!v3d_device_has_draw_index(&v3d->screen->devinfo));
+         cl_emit(&job->indirect, GL_SHADER_STATE_RECORD, shader) {
+                 shader.enable_clipping = true;
+                 /* V3D_DIRTY_PRIM_MODE | V3D_DIRTY_RASTERIZER */
+@@ -713,14 +691,14 @@ v3d_emit_gl_shader_state(struct v3d_cont
+ 
+ #if V3D_VERSION >= 41
+                 shader.min_coord_shader_input_segments_required_in_play =
+-                        vpm_cfg_bin.As;
++                        vpm_cfg_bin->As;
+                 shader.min_vertex_shader_input_segments_required_in_play =
+-                        vpm_cfg.As;
++                        vpm_cfg->As;
+ 
+                 shader.min_coord_shader_output_segments_required_in_play_in_addition_to_vcm_cache_size =
+-                        vpm_cfg_bin.Ve;
++                        vpm_cfg_bin->Ve;
+                 shader.min_vertex_shader_output_segments_required_in_play_in_addition_to_vcm_cache_size =
+-                        vpm_cfg.Ve;
++                        vpm_cfg->Ve;
+ 
+                 shader.coordinate_shader_4_way_threadable =
+                         v3d->prog.cs->prog_data.vs->base.threads == 4;
+@@ -765,6 +743,128 @@ v3d_emit_gl_shader_state(struct v3d_cont
+                                    vtx->defaults_offset);
+ #endif
+         }
++}
++
++static void
++v3d_emit_gl_shader_state(struct v3d_context *v3d,
++                         const struct pipe_draw_info *info)
++{
++        struct v3d_job *job = v3d->job;
++        /* V3D_DIRTY_VTXSTATE */
++        struct v3d_vertex_stateobj *vtx = v3d->vtx;
++        /* V3D_DIRTY_VTXBUF */
++        struct v3d_vertexbuf_stateobj *vertexbuf = &v3d->vertexbuf;
++
++        /* Upload the uniforms to the indirect CL first */
++        struct v3d_cl_reloc fs_uniforms =
++                v3d_write_uniforms(v3d, job, v3d->prog.fs,
++                                   PIPE_SHADER_FRAGMENT);
++
++        struct v3d_cl_reloc gs_uniforms = { NULL, 0 };
++        struct v3d_cl_reloc gs_bin_uniforms = { NULL, 0 };
++        if (v3d->prog.gs) {
++                gs_uniforms = v3d_write_uniforms(v3d, job, v3d->prog.gs,
++                                                 PIPE_SHADER_GEOMETRY);
++        }
++        if (v3d->prog.gs_bin) {
++                gs_bin_uniforms = v3d_write_uniforms(v3d, job, v3d->prog.gs_bin,
++                                                     PIPE_SHADER_GEOMETRY);
++        }
++
++        struct v3d_cl_reloc vs_uniforms =
++                v3d_write_uniforms(v3d, job, v3d->prog.vs,
++                                   PIPE_SHADER_VERTEX);
++        struct v3d_cl_reloc cs_uniforms =
++                v3d_write_uniforms(v3d, job, v3d->prog.cs,
++                                   PIPE_SHADER_VERTEX);
++
++        /* Update the cache dirty flag based on the shader progs data */
++        job->tmu_dirty_rcl |= v3d->prog.cs->prog_data.vs->base.tmu_dirty_rcl;
++        job->tmu_dirty_rcl |= v3d->prog.vs->prog_data.vs->base.tmu_dirty_rcl;
++        if (v3d->prog.gs_bin) {
++                job->tmu_dirty_rcl |=
++                        v3d->prog.gs_bin->prog_data.gs->base.tmu_dirty_rcl;
++        }
++        if (v3d->prog.gs) {
++                job->tmu_dirty_rcl |=
++                        v3d->prog.gs->prog_data.gs->base.tmu_dirty_rcl;
++        }
++        job->tmu_dirty_rcl |= v3d->prog.fs->prog_data.fs->base.tmu_dirty_rcl;
++
++        uint32_t num_elements_to_emit = 0;
++        for (int i = 0; i < vtx->num_elements; i++) {
++                struct pipe_vertex_element *elem = &vtx->pipe[i];
++                struct pipe_vertex_buffer *vb =
++                        &vertexbuf->vb[elem->vertex_buffer_index];
++                if (vb->buffer.resource)
++                        num_elements_to_emit++;
++        }
++
++        uint32_t shader_state_record_length =
++                cl_packet_length(GL_SHADER_STATE_RECORD);
++#if V3D_VERSION >= 41
++        if (v3d->prog.gs) {
++                shader_state_record_length +=
++                        cl_packet_length(GEOMETRY_SHADER_STATE_RECORD) +
++                        cl_packet_length(TESSELLATION_GEOMETRY_COMMON_PARAMS) +
++                        2 * cl_packet_length(TESSELLATION_GEOMETRY_SHADER_PARAMS);
++        }
++#endif
++
++        /* See GFXH-930 workaround below */
++        uint32_t shader_rec_offset =
++                    v3d_cl_ensure_space(&job->indirect,
++                                    shader_state_record_length +
++                                    MAX2(num_elements_to_emit, 1) *
++                                    cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD),
++                                    32);
++
++        /* XXX perf: We should move most of the SHADER_STATE_RECORD setup to
++         * compile time, so that we mostly just have to OR the VS and FS
++         * records together at draw time.
++         */
++
++        struct vpm_config vpm_cfg_bin, vpm_cfg;
++
++        assert(v3d->screen->devinfo.ver >= 41 || !v3d->prog.gs);
++        v3d_compute_vpm_config(&v3d->screen->devinfo,
++                               v3d->prog.cs->prog_data.vs,
++                               v3d->prog.vs->prog_data.vs,
++                               v3d->prog.gs ? v3d->prog.gs_bin->prog_data.gs : NULL,
++                               v3d->prog.gs ? v3d->prog.gs->prog_data.gs : NULL,
++                               &vpm_cfg_bin,
++                               &vpm_cfg);
++
++        if (v3d->prog.gs) {
++#if V3D_VERSION >= 41
++                v3d_emit_gs_state_record(v3d->job,
++                                         v3d->prog.gs_bin, gs_bin_uniforms,
++                                         v3d->prog.gs, gs_uniforms);
++
++                struct v3d_gs_prog_data *gs = v3d->prog.gs->prog_data.gs;
++                v3d_emit_tes_gs_common_params(v3d->job,
++                                              gs->out_prim_type,
++                                              gs->num_invocations);
++
++                /* Bin Tes/Gs params */
++                v3d_emit_tes_gs_shader_params(v3d->job,
++                                              vpm_cfg_bin.gs_width,
++                                              vpm_cfg_bin.Gd,
++                                              vpm_cfg_bin.Gv);
++
++                /* Render Tes/Gs params */
++                v3d_emit_tes_gs_shader_params(v3d->job,
++                                              vpm_cfg.gs_width,
++                                              vpm_cfg.Gd,
++                                              vpm_cfg.Gv);
++#else
++                unreachable("No GS support pre-4.1");
++#endif
++        }
++
++        emit_shader_state_record(v3d, job, info, vtx,
++                                 cs_uniforms, vs_uniforms, fs_uniforms,
++                                 &vpm_cfg_bin, &vpm_cfg);
+ 
+         bool cs_loaded_any = false;
+         for (int i = 0; i < vtx->num_elements; i++) {
